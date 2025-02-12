@@ -40,6 +40,10 @@ dev = ["ruff", "pytest"]
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tglc", "tglc.*"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
