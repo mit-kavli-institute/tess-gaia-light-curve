@@ -285,7 +285,7 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
     :return:
     """
     # input_files = glob(f'/pdo/spoc-data/sector-{sector:03d}/ffi*/**/*{camera}-{ccd}-????-?_ffic.fits*')
-    input_files = glob(f'{local_directory}ffi/*{camera}-{ccd}-????-?_ffic.fits')
+    input_files = glob(f'{local_directory}ffi/*cam{camera}-ccd{ccd}*_img.fits')
     print('camera: ' + str(camera) + '  ccd: ' + str(ccd) + '  num of files: ' + str(len(input_files)))
     time = []
     quality = []
@@ -294,10 +294,15 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
     for i, file in enumerate(tqdm(input_files)):
         try:
             with fits.open(file, mode='denywrite', memmap=False) as hdul:
-                quality.append(hdul[1].header['DQUALITY'])
-                cadence.append(hdul[0].header['FFIINDEX'])
-                flux[i] = hdul[1].data[0:2048, 44:2092]
-                time.append((hdul[1].header['TSTOP'] + hdul[1].header['TSTART']) / 2)
+                quality_flag = (
+                    (hdul[0].header['COARSE'] << 2)
+                    & (hdul[0].header['RW_DESAT'] << 5)
+                    & (hdul[0].header[f'STRAYLT{camera}'])
+                )
+                quality.append(quality_flag)
+                cadence.append(hdul[0].header['CADENCE'])
+                flux[i] = hdul[0].data[0:2048, 44:2092]
+                time.append(hdul[0].header['MIDTJD'])
 
         except:
             print(f'Corrupted file {file}, download again ...')
@@ -305,10 +310,15 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
                 f'https://mast.stsci.edu/api/v0.1/Download/file/?uri=mast:TESS/product/{os.path.basename(file)}')
             open(file, 'wb').write(response.content)
             with fits.open(file, mode='denywrite', memmap=False) as hdul:
-                quality.append(hdul[1].header['DQUALITY'])
-                cadence.append(hdul[0].header['FFIINDEX'])
-                flux[i] = hdul[1].data[0:2048, 44:2092]
-                time.append((hdul[1].header['TSTOP'] + hdul[1].header['TSTART']) / 2)
+                quality_flag = (
+                    (hdul[0].header['COARSE'] << 2)
+                    & (hdul[0].header['RW_DESAT'] << 5)
+                    & (hdul[0].header[f'STRAYLT{camera}'])
+                )
+                quality.append(quality_flag)
+                cadence.append(hdul[0].header['CADENCE'])
+                flux[i] = hdul[0].data[0:2048, 44:2092]
+                time.append(hdul[0].header['MIDTJD'])
     time_order = np.argsort(np.array(time))
     time = np.array(time)[time_order]
     flux = flux[time_order, :, :]
@@ -328,7 +338,8 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
         return
     # load mask
     mask = pkg_resources.resource_stream(__name__, f'background_mask/median_mask.fits')
-    mask = fits.open(mask)[0].data[(camera - 1) * 4 + (ccd - 1), :]
+    with fits.open(mask) as mask_hdul:
+        mask = mask_hdul[0].data[(camera - 1) * 4 + (ccd - 1), :]
     mask = np.repeat(mask.reshape(1, 2048), repeats=2048, axis=0)
     bad_pixels = np.zeros(np.shape(flux[0]))
     med_flux = np.median(flux, axis=0)
@@ -351,12 +362,12 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
     mask = np.ma.masked_equal(mask, 0)
 
     for i in range(10):
-        hdul = fits.open(input_files[np.where(np.array(quality) == 0)[0][i]])
-        wcs = WCS(hdul[1].header)
+        with fits.open(input_files[np.nonzero(np.array(quality) == 0)][i]) as hdul:
+            wcs = WCS(hdul[0].header)
         if wcs.axis_type_names == ['RA', 'DEC']:
+            exposure = int(hdul[0].header['EXPTIME'])
             break
 
-    exposure = int((hdul[0].header['TSTOP'] - hdul[0].header['TSTART']) * 86400)
 
     # 95*95 cuts with 2 pixel redundant, (22*22 cuts)
     # try 77*77 with 4 redundant, (28*28 cuts)
