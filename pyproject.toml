@@ -1,0 +1,66 @@
+[project]
+name = "tglc"
+description = "TESS-Gaia Light Curves"
+version = "0.6.7"
+authors = [
+  { name = "Te Han", email = "tehanhunter@gmail.com" },
+  { name = "Jack Haviland", email = "haviland@mit.edu" },
+]
+readme = "README.rst"
+urls = { HomePage = "https://github.com/TeHanHunter/TESS_Gaia_Light_Curve" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+requires-python = ">=3.8, <3.13"
+dependencies = [
+  "astropy>=5.1",
+  "astroquery==0.4.7",
+  "matplotlib",
+  "numpy",
+  "oauthlib",
+  "requests",
+  "scipy",
+  "threadpoolctl",
+  "tqdm",
+  "wheel",
+  "wotan",
+  "seaborn",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+pdo = ["pyticdb @ git+ssh://git@github.com/mit-kavli-institute/pyticdb.git"]
+dev = ["ruff", "pytest"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]
+log_cli_level = "info"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = [
+  "B",   # flake8-bugbear
+  "I",   # isort
+  "UP",  # pyupgrade
+  "NPY", # numpy-specific
+  "PD",  # pandas-specific
+]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+force-sort-within-sections = true
+combine-as-imports = true
