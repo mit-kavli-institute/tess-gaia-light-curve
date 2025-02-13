@@ -11,12 +11,16 @@ import time
 from glob import glob
 from os.path import exists
 from urllib.parse import quote as urlencode
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
-from astropy.table import Table, hstack, vstack, unique, Column
+from astropy.table import Table, QTable, hstack, Column, MaskedColumn
+from astropy.time import Time
 from astropy.wcs import WCS
 from astroquery.gaia import Gaia
 from scipy import ndimage
 from tqdm import tqdm, trange
+
+from tglc.util.constants import convert_gaia_mags_to_tmag
 
 Gaia.ROW_LIMIT = -1
 Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source"  # TODO: dr3 MJD = 2457388.5, TBJD = 388.5
@@ -62,47 +66,78 @@ def mast_json2table(json_obj):
     return data_table
 
 
-def tic_advanced_search_position_rows(ra=1., dec=1., radius=0.5, limit_mag=16):
-    request = {"service": "Mast.Catalogs.Filtered.Tic.Position.Rows",
-               "format": "json",
-               "params": {
-                   "columns": 'ID, GAIA',
-                   "filters": [
-                       {"paramName": "Tmag",
-                        "values": [{"min": -10., "max": (limit_mag + 0.5)}]}],
-                   "ra": ra,
-                   "dec": dec,
-                   "radius": radius
-               }}
 
-    headers, out_string = mast_query(request)
-    out_data = json.loads(out_string)
-    return mast_json2table(out_data)
+def crossmatch_tic_to_gaia(
+    tic: QTable,
+    gaia: QTable,
+    match_tmag_tolerance: float = 0.1,
+    match_angular_distance_tolerance: u.deg.physical_type = 2.1 * u.arcsec,
+):
+    """
+    Crossmatch between TIC and Gaia sources.
 
+    See `SkyCoord.match_to_catalog_sky` for more information about how matches are identified.
 
-def convert_gaia_id(catalogdata_tic):
-    query = """
-            SELECT dr2_source_id, dr3_source_id
-            FROM gaiadr3.dr2_neighbourhood
-            WHERE dr2_source_id IN {gaia_ids}
-            """
-    gaia_array = np.array([str(item) for item in catalogdata_tic['GAIA']], dtype=object)
-    gaia_array = gaia_array[gaia_array != 'None']
-    # np.save('gaia_array.npy', gaia_array)
-    segment = (len(gaia_array) - 1) // 10000
-    gaia_tuple = tuple(gaia_array[:10000])
-    results = Gaia.launch_job_async(query.format(gaia_ids=gaia_tuple)).get_results()
-    # np.save('result.npy', np.array(results))
-    for i in range(segment):
-        gaia_array_cut = gaia_array[((i+1)*10000):((i+2)*10000)]
-        gaia_tuple_cut = tuple(gaia_array_cut)
-        results = vstack([results, Gaia.launch_job_async(query.format(gaia_ids=gaia_tuple_cut)).get_results()])
-    tic_ids = []
-    for j in range(len(results)):
-        tic_ids.append(int(catalogdata_tic['ID'][np.where(catalogdata_tic['GAIA'] == str(results['dr2_source_id'][j]))][0]))
-    tic_ids = Column(np.array(tic_ids), name='TIC')
-    results.add_column(tic_ids)
-    return results
+    Parameters
+    ----------
+    tic : QTable
+        TIC data for sources to be identifid in Gaia data. Should include at least the following
+        columns:
+            - `"ra"`
+            - `"dec"`
+            - `"pmra"`
+            - `"pmdec"`
+            - `"tmag"`
+    gaia : QTable
+        Gaia data to be searched against for TIC sources. Should include at least the following
+        columns:
+            - `"ra"`
+            - `"dec"`
+            - `"phot_g_mean_mag"`
+            - `"phot_bp_mean_mag"`
+            - `"phot_rp_mean_mag"`
+            - `"designation"`
+    tmag_tolerance : float
+        Tolerance for difference between Tmag from the TIC and converted Tmag based on Gaia data.
+        See `convert_gaia_mags_to_tmag` for more information about the conversion.
+        Default = 0.1
+    pix_dist_tolerance : u.Quantity
+        Tolerance for angular distance between matched sources.
+        Default = 2.1 arcsec = 0.1 TESS pixels
+
+    Returns
+    -------
+    gaia_designations : MaskedColumn
+        Column containing Gaia designations for sources in TIC data provided. Rows where no match
+        could successfully be made with the provided tolerances are masked.
+    """
+    tic_coords = SkyCoord(
+        ra=tic["ra"],
+        dec=tic["dec"],
+        pm_ra_cosdec=tic["pmra"],
+        pm_dec=tic["pmdec"],
+        frame="icrs",
+        obstime=Time("J2000"),
+    )
+    pm_adjusted_tic_coords = tic_coords.apply_space_motion(Time("J2016"))
+    gaia_coords = SkyCoord(gaia["ra"], gaia["dec"])
+    match_idx, match_dist_angle, _match_dist_3d = pm_adjusted_tic_coords.match_to_catalog_sky(gaia_coords)
+
+    close_matches = match_dist_angle <= match_angular_distance_tolerance
+
+    gaia_tmag = convert_gaia_mags_to_tmag(
+        gaia["phot_g_mean_mag"][match_idx],
+        gaia["phot_bp_mean_mag"][match_idx],
+        gaia["phot_rp_mean_mag"][match_idx],
+    )
+    tmag_difference = np.abs(gaia_tmag - tic["tmag"])
+    close_tmags = tmag_difference <= match_tmag_tolerance
+
+    successful_matches = close_matches & close_tmags
+
+    return MaskedColumn(
+        gaia["designation"][match_idx], name="gaia_designation", mask=~successful_matches
+    )
 
 
 # from Tim
@@ -138,10 +173,12 @@ def background_mask(im=None):
     return cal_factor
 
 
-class Source(object):
-    def __init__(self, x=0, y=0, flux=None, time=None, wcs=None, quality=None, mask=None, exposure=1800, sector=0,
-                 size=150,
-                 camera=1, ccd=1, cadence=None):
+class Source:
+    def __init__(
+        self, x=0, y=0,
+        flux=None, time=None, wcs=None, quality=None, mask=None, exposure=1800,
+        sector=0, size=150, camera=1, ccd=1, cadence=None, catalogs_directory=None
+    ):
         """
         Source object that includes all data from TESS and Gaia DR2
         :param x: int, required
@@ -164,8 +201,9 @@ class Source(object):
         CCD number
         :param cadence: list, required
         list of cadences of TESS FFI
+        :param catalogs_directory: str, required
+        path to directory containing Gaia and TIC catalog files
         """
-        super(Source, self).__init__()
         if cadence is None:
             cadence = []
         if quality is None:
@@ -185,20 +223,39 @@ class Source(object):
         self.quality = quality
         self.exposure = exposure
         self.wcs = wcs
-        co1 = 38.5
-        co2 = 116.5
-        catalog_1 = self.search_gaia(x, y, co1, co1)
-        catalog_2 = self.search_gaia(x, y, co1, co2)
-        catalog_3 = self.search_gaia(x, y, co2, co1)
-        catalog_4 = self.search_gaia(x, y, co2, co2)
-        catalogdata = vstack([catalog_1, catalog_2, catalog_3, catalog_4], join_type='exact')
-        catalogdata = unique(catalogdata, keys='DESIGNATION')
-        coord = wcs.pixel_to_world([x + (size - 1) / 2 + 44], [y + (size - 1) / 2])[0].to_string()
-        ra = float(coord.split()[0])
-        dec = float(coord.split()[1])
-        catalogdata_tic = tic_advanced_search_position_rows(ra=ra, dec=dec, radius=(self.size + 2) * 21 * 0.707 / 3600)
-        # print(f'no_of_stars={len(catalogdata_tic)}, camera={camera}, ccd={ccd}: ra={ra}, dec={dec}, radius={(self.size + 2) * 21 * 0.707 / 3600}')
-        self.tic = convert_gaia_id(catalogdata_tic)
+
+        # Load catalog files and find relevant stars
+        gaia_catalog_file = catalogs_directory + f"Gaia_camera{camera}.ecsv"
+        gaia_catalog = QTable.read(gaia_catalog_file)
+        gaia_sky_coordinates = SkyCoord(gaia_catalog["ra"], gaia_catalog["dec"])
+        gaia_x, gaia_y = wcs.world_to_pixel(gaia_sky_coordinates)
+        gaia_x_in_source = (x <= gaia_x) & (gaia_x <= x + size)
+        gaia_y_in_source = (y <= gaia_y) & (gaia_y <= y + size)
+        gaia_in_source = gaia_x_in_source & gaia_y_in_source
+        catalogdata = gaia_catalog[gaia_in_source]
+
+        tic_catalog_file = catalogs_directory + f"TIC_camera{camera}.ecsv"
+        tic_catalog = QTable.read(tic_catalog_file)
+        tic_sky_coordinates = SkyCoord(tic_catalog["ra"], tic_catalog["dec"])
+        tic_x, tic_y = wcs.world_to_pixel(tic_sky_coordinates)
+        tic_x_in_source = (x <= tic_x) & (tic_x <= x + size)
+        tic_y_in_source = (y <= tic_y) & (tic_y <= y + size)
+        tic_in_source = tic_x_in_source & tic_y_in_source
+        catalogdata_tic = tic_catalog[tic_in_source]
+
+        # Cross match TIC and Gaia
+        tic_match_table = Table()
+        tic_match_table.add_column(catalogdata_tic["id"], name="TIC")
+        tic_match_table.add_column(crossmatch_tic_to_gaia(catalogdata_tic, catalogdata), name="gaia_designation")
+        self.tic = tic_match_table
+
+        # TODO remove this at some point, but right now units aren't expected downstream
+        for name, col in catalogdata.columns.items():
+            if np.ma.is_masked(col):
+                catalogdata[name] = MaskedColumn(col.data, mask=col.mask)
+            else:
+                catalogdata[name] = Column(col.data)
+
         self.flux = flux[:, y:y + size, x:x + size]
         self.mask = mask[y:y + size, x:x + size]
         self.time = np.array(time)
@@ -213,7 +270,7 @@ class Source(object):
         y_gaia = np.zeros(num_gaia)
         tess_mag = np.zeros(num_gaia)
         in_frame = [True] * num_gaia
-        for i, designation in enumerate(catalogdata['DESIGNATION']):
+        for i, designation in enumerate(catalogdata['designation']):
             ra = catalogdata['ra'][i]
             dec = catalogdata['dec'][i]
             if not np.isnan(catalogdata['pmra'].mask[i]):  # masked?
@@ -362,7 +419,7 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
     mask = np.ma.masked_equal(mask, 0)
 
     for i in range(10):
-        with fits.open(input_files[np.nonzero(np.array(quality) == 0)][i]) as hdul:
+        with fits.open(input_files[np.nonzero(np.array(quality) == 0)[0][i]]) as hdul:
             wcs = WCS(hdul[0].header)
         if wcs.axis_type_names == ['RA', 'DEC']:
             exposure = int(hdul[0].header['EXPTIME'])
@@ -383,5 +440,5 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
                 with open(source_path, 'wb') as output:
                     source = Source(x=i * (size - 4), y=j * (size - 4), flux=flux, mask=mask, sector=sector,
                                     time=time, size=size, quality=quality, wcs=wcs, camera=camera, ccd=ccd,
-                                    exposure=exposure, cadence=cadence)
+                                    exposure=exposure, cadence=cadence, catalogs_directory=f"{local_directory}catalogs/")
                     pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)
