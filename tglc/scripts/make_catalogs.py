@@ -18,7 +18,7 @@ from tglc.util.tess_pointings import get_sector_camera_pointing
 
 logger = getLogger(__name__)
 
-TIC_CATALOG_FIELDS = ["ID", "ra", "dec", "Tmag", "pmRA", "pmDEC", "Jmag", "Kmag", "Vmag"]
+TIC_CATALOG_FIELDS = ["ID", "GAIA", "ra", "dec", "Tmag", "pmRA", "pmDEC", "Jmag", "Kmag", "Vmag"]
 
 GAIA_CATALOG_FIELDS = [
     "DESIGNATION",
@@ -67,12 +67,12 @@ def get_tic_catalog_data(
     camera_pointing = get_sector_camera_pointing(sector, camera)
 
     if HAS_PYTICDB:
-        from pyticdb import TICEntry
         import sqlalchemy as sa
 
         from tglc.databases import TIC
 
-        tic = TIC("tic82")
+        tic = TIC("tic_82")
+        TICEntry = tic.table("ticentries")
 
         base_query = tic.select("ticentries", *(field.lower() for field in TIC_CATALOG_FIELDS))
         magnitude_filter = TICEntry.c.tmag < magnitude_cutoff
@@ -83,9 +83,13 @@ def get_tic_catalog_data(
             TICEntry.c.rad < 0.8,
         )
 
-        tic_cone_query = base_query.where(
-            tic.in_cone("ticentries", camera_pointing.ra.deg, camera_pointing.dec.deg, width=18.0)
-        ).where(sa.or_(magnitude_filter, mdwarf_filter))
+        # Pyticdb can't handle np.float types, which is what camera_pointing.xx.deg are by default
+        ra = float(camera_pointing.ra.deg)
+        dec = float(camera_pointing.dec.deg)
+
+        tic_cone_query = base_query.where(tic.in_cone("ticentries", ra, dec, width=18.0)).where(
+            sa.or_(magnitude_filter, mdwarf_filter)
+        )
         logger.debug(f"Querying TIC via Pyticdb for 18.0 deg cone around {camera_pointing}")
         tic_results = QTable.from_pandas(tic.to_df(tic_cone_query))
 
@@ -152,10 +156,15 @@ def get_gaia_catalog_data(sector: int, camera: int) -> QTable:
         from tglc.databases import Gaia
 
         gaia = Gaia("gaia3")
+
+        # Pyticdb can't handle np.float types, which is what camera_pointing.xx.deg are by default
+        ra = float(camera_pointing.ra.deg)
+        dec = float(camera_pointing.dec.deg)
+
         gaia_cone_query = gaia.query_by_loc(
             "gaia_source",
-            camera_pointing.ra.deg,
-            camera_pointing.dec.deg,
+            ra,
+            dec,
             18.0,
             *(field.lower() for field in GAIA_CATALOG_FIELDS),
             as_query=True,
@@ -205,13 +214,23 @@ def make_catalog_main():
     for camera in range(1, 5):
         logger.info(f"Creating catalogs for camera {camera} in {args.output_dir}")
 
-        tic_results = get_tic_catalog_data(args.sector, camera)
-        tic_catalog_file = args.output_dir / f"TIC_camera{camera}.ecsv"
-        tic_results.write(tic_catalog_file)
+        tic_catalog_file: Path = args.output_dir / f"TIC_camera{camera}.ecsv"
+        if args.replace or not tic_catalog_file.is_file():
+            tic_results = get_tic_catalog_data(args.sector, camera)
+            tic_results.write(tic_catalog_file, overwrite=args.replace)
+        else:
+            logger.info(
+                f"TIC catalog at {tic_catalog_file} already exists and will not be overwritten"
+            )
 
-        gaia_results = get_gaia_catalog_data(args.sector, camera)
         gaia_catalog_file = args.output_dir / f"Gaia_camera{camera}.ecsv"
-        gaia_results.write(gaia_catalog_file)
+        if args.replace or not gaia_catalog_file.is_file():
+            gaia_results = get_gaia_catalog_data(args.sector, camera)
+            gaia_results.write(gaia_catalog_file, overwrite=args.replace)
+        else:
+            logger.info(
+                f"Gaia catalog at {gaia_catalog_file} already exists and will not be overwritten"
+            )
 
 
 if __name__ == "__main__":

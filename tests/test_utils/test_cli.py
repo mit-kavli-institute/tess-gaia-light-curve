@@ -31,6 +31,7 @@ def test_base_parser_has_expected_arguments():
     args = parser.parse_args([])
 
     assert isinstance(args.nprocs, int)
+    assert isinstance(args.replace, bool)
     assert isinstance(args.debug, bool)
     assert args.logfile is None
     assert isinstance(args.tglc_data_dir, Path)

@@ -25,6 +25,9 @@ TGLC_DATA_DIR_DEFAULT = get_parent_tglc_data_dir(Path.cwd().expanduser()).resolv
 
 base_parser = argparse.ArgumentParser(add_help=False)
 base_parser.add_argument("-n", "--nprocs", type=int, default=1, help="Number of processes to use")
+base_parser.add_argument(
+    "-r", "--replace", action="store_true", help="Whether to overwrite existing data products"
+)
 base_parser.add_argument("--debug", action="store_true", help="Whether to output debug-level logs")
 base_parser.add_argument("-l", "--logfile", type=Path, help="File to write logs")
 base_parser.add_argument(
