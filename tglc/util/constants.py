@@ -68,6 +68,14 @@ def get_exposure_time_from_sector(sector: int) -> u.Quantity:
         return 200 * u.second
 
 
+def get_sector_containing_orbit(orbit: int) -> int:
+    """Get the TESS sector containing a TESS orbit."""
+    if 9 <= orbit <= 198:
+        return (orbit - 7) // 2
+    else:
+        raise ValueError(f"Sector not known for orbit {orbit}")
+
+
 def convert_gaia_mags_to_tmag(
     G: npt.ArrayLike, Gbp: npt.ArrayLike, Grp: npt.ArrayLike
 ) -> np.ma.MaskedArray:

@@ -1,7 +1,20 @@
 """Command line interface utilities for TGLC scripts."""
 
 import argparse
+import os
 from pathlib import Path
+
+
+def limit_math_multithreading(max_threads: int = 1):
+    """
+    Limit the number of threads used by math package extensions.
+
+    This is important to prevent clashes during multiprocessing.
+    """
+    os.environ["OPENBLAS_NUM_THREADS"] = f"{max_threads}"
+    os.environ["MKL_NUM_THREADS"] = f"{max_threads}"
+    os.environ["NUMEXPR_NUM_THREADS"] = f"{max_threads}"
+    os.environ["OMP_NUM_THREADS"] = f"{max_threads}"
 
 
 # Default value for --tglc-data-dir command line argument
