@@ -12,7 +12,6 @@ from astroquery.mast import Catalogs
 from astropy.coordinates import SkyCoord
 from astropy.table import Table, hstack, Column
 from astropy.wcs import WCS
-from tglc.ffi import tic_advanced_search_position_rows, convert_gaia_id
 
 if not sys.warnoptions:
     warnings.simplefilter("ignore")
