@@ -1,7 +1,7 @@
 """
 Provides sky coordinates of the TESS camera pointings for each sector. Data is based on the CSV
 linked on <https://tess.mit.edu/observations/>, which at the time of writing is
-| <https://tess.mit.edu/wp-content/uploads/Year1-7_pointings_long.csv>.
+<https://tess.mit.edu/wp-content/uploads/Years1-8_pointings_long.csv>.
 The CSV data should be updated as more sectors become available.
 """
 
@@ -11,11 +11,11 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Column, QTable
 import astropy.units as u
 
-from . import data
+from tglc.util import data
 
 
 tglc_data = resources.files(data)
-TESS_SECTOR_POINTINGS: QTable = QTable.read(tglc_data / "Year1-7_pointings_long.csv", format="csv")
+TESS_SECTOR_POINTINGS: QTable = QTable.read(tglc_data / "Years1-8_pointings_long.csv", format="csv")
 
 
 # Spacecraft and camera pointings are stored as strings formatted as "{ra}, {dec}, {roll}", so we
@@ -54,7 +54,7 @@ def get_sector_camera_pointing(sector: int, camera: int) -> SkyCoord:
     ----------
     sector : int
         Sector of interest
-    caemra : int
+    camera : int
         Camera of interest
 
     Returns
@@ -65,9 +65,9 @@ def get_sector_camera_pointing(sector: int, camera: int) -> SkyCoord:
     Raises
     ------
     ValueError
-        If the given sector is not contained in the known data downloaded from <tess.mit.edu>.
+        If the given sector is not contained in the known data downloaded from <https://tess.mit.edu>.
     """
-    if sector not in range(1, 97):
+    if sector not in range(1, 135):
         raise ValueError(f"No data available for sector {sector}.")
     if camera not in range(1, 5):
         raise ValueError(f"Camera {camera} is invalid, must be in range [1-4].")

@@ -172,7 +172,7 @@ def fit_lc(A, source, star_info=None, x=0., y=0., star_num=0, factor=2, psf_size
     effective PSF as a 3d array as a timeseries
     :param near_edge: boolean, required
     whether the star is 2 pixels or closer to the edge of a CCD
-    :return: aperture lightcurve, PSF lightcurve, vertical pixel coord, horizontal pixel coord, portion of light in aperture
+    :return: aperture lightcurve, PSF lightcurve, vertical pixel coord, horizontal pixel coord, portion of light curve in each pixel of the ePSF
     """
     over_size = psf_size * factor + 1
     a = star_info[star_num][1]
@@ -202,17 +202,20 @@ def fit_lc(A, source, star_info=None, x=0., y=0., star_num=0, factor=2, psf_size
     for j in range(len(source.time)):
         aperture[j] = np.array(source.flux[j][down:up, left:right]).flatten() - np.dot(A_cut, e_psf[j])
     aperture = aperture.reshape((len(source.time), up - down, right - left))
-    target_5x5 = (np.dot(A_target, np.nanmedian(e_psf, axis=0)).reshape(cut_size, cut_size))
-    field_stars_5x5 = (np.dot(A_cut, np.nanmedian(e_psf, axis=0)).reshape(cut_size, cut_size))
+    target_5x5 = (np.dot(A_target, np.nanmedian(e_psf, axis=0)).reshape(up - down, right - left))
+    field_stars_5x5 = (np.dot(A_cut, np.nanmedian(e_psf, axis=0)).reshape(up - down, right - left))
+    if target_5x5.shape != (cut_size, cut_size):
+        # Pad with nans to get to 5x5 shape
+        # Pad amount in a direction is (expected_num_pix) - (actual_num_pix)
+        pad_left = (cut_size // 2) - (x - left)
+        pad_right = (cut_size // 2 + 1) - (right - x)
+        pad_down = (cut_size // 2) - (y - down)
+        pad_up = (cut_size // 2 + 1) - (up - y)
+        target_5x5 = np.pad(target_5x5, [(pad_down, pad_up), (pad_left, pad_right)], constant_values=np.nan)
+        field_stars_5x5 = np.pad(field_stars_5x5, [(pad_down, pad_up), (pad_left, pad_right)], constant_values=np.nan)
 
     # psf_lc
     over_size = psf_size * factor + 1
-    if near_edge:  # TODO: near_edge
-        psf_lc = np.zeros(len(source.time))
-        psf_lc[:] = np.NaN
-        e_psf_1d = np.nanmedian(e_psf[:, :over_size ** 2], axis=0).reshape(over_size, over_size)
-        portion = (36 / 49) * np.nansum(e_psf_1d[8:15, 8:15]) / np.nansum(e_psf_1d)  # only valid for factor = 2
-        return aperture, psf_lc, y - down, x - left, portion
     left_ = left - x + 5
     right_ = right - x + 5
     down_ = down - y + 5
@@ -231,6 +234,13 @@ def fit_lc(A, source, star_info=None, x=0., y=0., star_num=0, factor=2, psf_size
     A = np.zeros((psf_size ** 2, over_size ** 2 + bg_dof))
     A[np.repeat(index, 4), star_info_num[1]] = star_info_num[2]
     psf_shape = np.dot(e_psf, A.T).reshape(len(source.time), psf_size, psf_size)
+    psf_portions = np.nansum(psf_shape, axis=0) / np.nansum(psf_shape)
+
+    if near_edge:  # TODO: near_edge
+        psf_lc = np.zeros(len(source.time))
+        psf_lc[:] = np.nan
+        return aperture, psf_lc, y - down, x - left, psf_portions, target_5x5, field_stars_5x5
+
     psf_sim = psf_shape[:, down_:up_, left_: right_]
     # psf_sim = np.transpose(psf_shape[:, down_:up_, left_: right_], (0, 2, 1))
 
@@ -262,10 +272,9 @@ def fit_lc(A, source, star_info=None, x=0., y=0., star_num=0, factor=2, psf_size
             a = np.delete(A_, edge_pixel[outliers], 0)
             aper_flat = np.delete(aper_flat, edge_pixel[outliers])
             psf_lc[j] = np.linalg.lstsq(a, aper_flat)[0][0]
-    portion = np.nansum(psf_shape[:, 4:7, 4:7]) / np.nansum(psf_shape)
     # print(np.nansum(psf_shape[:, 5, 5]) / np.nansum(psf_shape))
     # np.save(f'toi-5344_psf_{source.sector}.npy', psf_shape)
-    return aperture, psf_lc, y - down, x - left, portion, target_5x5, field_stars_5x5
+    return aperture, psf_lc, y - down, x - left, psf_portions, target_5x5, field_stars_5x5
 
 
 def fit_lc_float_field(A, source, star_info=None, x=np.array([]), y=np.array([]), star_num=0, factor=2, psf_size=11,
@@ -325,7 +334,7 @@ def fit_lc_float_field(A, source, star_info=None, x=np.array([]), y=np.array([])
     over_size = psf_size * factor + 1
     if near_edge:  # TODO: near_edge
         psf_lc = np.zeros(len(source.time))
-        psf_lc[:] = np.NaN
+        psf_lc[:] = np.nan
         e_psf_1d = np.nanmedian(e_psf[:, :over_size ** 2], axis=0).reshape(over_size, over_size)
         portion = (36 / 49) * np.nansum(e_psf_1d[8:15, 8:15]) / np.nansum(e_psf_1d)  # only valid for factor = 2
         return aperture, psf_lc, y[star_num] - down, x[star_num] - left, portion

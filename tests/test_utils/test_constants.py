@@ -8,7 +8,14 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from tglc.util.constants import TESS_PIXEL_SCALE, convert_gaia_mags_to_tmag
+from tglc.util.constants import (
+    TESS_PIXEL_SATURATION_LEVEL,
+    TESS_PIXEL_SCALE,
+    convert_gaia_mags_to_tmag,
+    convert_tess_flux_to_tess_magnitude,
+    convert_tess_magnitude_to_tess_flux,
+    get_exposure_time_from_sector,
+)
 
 
 def test_tess_pixel_scale():
@@ -25,7 +32,37 @@ def test_tess_pixel_scale():
     assert np.isclose(detector_size.to(u.deg, equivalencies=TESS_PIXEL_SCALE).value, 24, 0.15)
 
 
-def test_convrt_gaia_mags_to_tmag_no_masks():
+def test_tess_pixel_saturation_level():
+    # Mostly testing for unit compatibility
+    assert (2e5 + 1) * u.electron > TESS_PIXEL_SATURATION_LEVEL
+
+
+def test_convert_tess_flux_to_tess_magnitude():
+    assert convert_tess_flux_to_tess_magnitude(15_000 * u.electron / u.second) == 10
+    assert np.isclose(convert_tess_flux_to_tess_magnitude(1 * u.electron / u.second), 20.44, 0.01)
+
+
+def test_convert_tess_magnitude_to_tess_flux():
+    assert convert_tess_magnitude_to_tess_flux(10) == 15_000 * u.electron / u.second
+    assert np.isclose(convert_tess_magnitude_to_tess_flux(20.44), 1 * u.electron / u.second, 0.01)
+
+
+def test_get_expossure_time_from_sector():
+    assert get_exposure_time_from_sector(1) == 1800 * u.second
+    assert get_exposure_time_from_sector(26) == 1800 * u.second
+    assert get_exposure_time_from_sector(27) == 600 * u.second
+    assert get_exposure_time_from_sector(55) == 600 * u.second
+    assert get_exposure_time_from_sector(56) == 200 * u.second
+    assert get_exposure_time_from_sector(100) == 200 * u.second
+
+
+@pytest.mark.parametrize("bad_sector", [0, -1])
+def test_get_exposure_time_from_sector_with_invalid_sector(bad_sector: int):
+    with pytest.raises(ValueError):
+        get_exposure_time_from_sector(bad_sector)
+
+
+def test_convert_gaia_mags_to_tmag_no_masks():
     # In the big parametrized test, all the objects are masked arrays, some of which just have the
     # masks as all false. This tests that the function works when normal arrays are passed
     G = np.array([10.0, 12.0, 14.0])

@@ -111,6 +111,9 @@ def crossmatch_tic_to_gaia(
         Column containing Gaia designations for sources in TIC data provided. Rows where no match
         could successfully be made with the provided tolerances are masked.
     """
+    if len(tic) == 0 or len(gaia) == 0:
+        return MaskedColumn([], name="gaia_designation", mask=[])
+
     tic_coords = SkyCoord(
         ra=tic["ra"],
         dec=tic["dec"],
@@ -177,7 +180,8 @@ class Source:
     def __init__(
         self, x=0, y=0,
         flux=None, time=None, wcs=None, quality=None, mask=None, exposure=1800,
-        sector=0, size=150, camera=1, ccd=1, cadence=None, catalogs_directory=None
+        orbit=0, sector=0, size=150, camera=1, ccd=1, cadence=None, gaia_catalog=None,
+        tic_catalog=None,
     ):
         """
         Source object that includes all data from TESS and Gaia DR2
@@ -191,6 +195,8 @@ class Source:
         1d array of time
         :param wcs: astropy.wcs.wcs.WCS, required
         WCS Keywords of the TESS FFI
+        :param orbit: int, required
+        TESS orbit number
         :param sector: int, required
         TESS sector number
         :param size: int, optional
@@ -201,8 +207,10 @@ class Source:
         CCD number
         :param cadence: list, required
         list of cadences of TESS FFI
-        :param catalogs_directory: str, required
-        path to directory containing Gaia and TIC catalog files
+        :param gaia_catalog: QTable, required
+        Gaia catalog data
+        :param tic_catalog: QTable, required
+        TIC catalog data
         """
         if cadence is None:
             cadence = []
@@ -216,6 +224,7 @@ class Source:
             flux = []
 
         self.size = size
+        self.orbit = orbit
         self.sector = sector
         self.camera = camera
         self.ccd = ccd
@@ -223,23 +232,21 @@ class Source:
         self.quality = quality
         self.exposure = exposure
         self.wcs = wcs
+        self.ccd_x = x + 44
+        self.ccd_y = y
 
         # Load catalog files and find relevant stars
-        gaia_catalog_file = catalogs_directory + f"Gaia_camera{camera}.ecsv"
-        gaia_catalog = QTable.read(gaia_catalog_file)
         gaia_sky_coordinates = SkyCoord(gaia_catalog["ra"], gaia_catalog["dec"])
         gaia_x, gaia_y = wcs.world_to_pixel(gaia_sky_coordinates)
-        gaia_x_in_source = (x <= gaia_x) & (gaia_x <= x + size)
-        gaia_y_in_source = (y <= gaia_y) & (gaia_y <= y + size)
+        gaia_x_in_source = (self.ccd_x <= gaia_x) & (gaia_x <= self.ccd_x + size)
+        gaia_y_in_source = (self.ccd_y <= gaia_y) & (gaia_y <= self.ccd_y + size)
         gaia_in_source = gaia_x_in_source & gaia_y_in_source
         catalogdata = gaia_catalog[gaia_in_source]
 
-        tic_catalog_file = catalogs_directory + f"TIC_camera{camera}.ecsv"
-        tic_catalog = QTable.read(tic_catalog_file)
         tic_sky_coordinates = SkyCoord(tic_catalog["ra"], tic_catalog["dec"])
         tic_x, tic_y = wcs.world_to_pixel(tic_sky_coordinates)
-        tic_x_in_source = (x <= tic_x) & (tic_x <= x + size)
-        tic_y_in_source = (y <= tic_y) & (tic_y <= y + size)
+        tic_x_in_source = (self.ccd_x <= tic_x) & (tic_x <= self.ccd_x + size)
+        tic_y_in_source = (self.ccd_y <= tic_y) & (tic_y <= self.ccd_y + size)
         tic_in_source = tic_x_in_source & tic_y_in_source
         catalogdata_tic = tic_catalog[tic_in_source]
 
@@ -279,8 +286,8 @@ class Source:
                 dec += catalogdata['pmdec'][i] * interval / 1000 / 3600
             pixel = self.wcs.all_world2pix(
                 np.array([catalogdata['ra'][i], catalogdata['dec'][i]]).reshape((1, 2)), 0, quiet=True)
-            x_gaia[i] = pixel[0][0] - x - 44
-            y_gaia[i] = pixel[0][1] - y
+            x_gaia[i] = pixel[0][0] - self.ccd_x
+            y_gaia[i] = pixel[0][1] - self.ccd_y
             try:
                 tic_id[i] = catalogdata_tic['ID'][np.where(catalogdata_tic['GAIA'] == designation.split()[2])[0][0]]
             except:
@@ -304,7 +311,9 @@ class Source:
         t = Table()
         t[f'tess_mag'] = tess_mag[in_frame]
         t[f'tess_flux'] = tess_flux[in_frame]
-        t[f'tess_flux_ratio'] = tess_flux[in_frame] / np.nanmax(tess_flux[in_frame])
+        t[f'tess_flux_ratio'] = tess_flux[in_frame] / (
+            np.nanmax(tess_flux[in_frame]) if len(tess_flux[in_frame]) > 0 else 1
+        )
         t[f'sector_{self.sector}_x'] = x_gaia[in_frame]
         t[f'sector_{self.sector}_y'] = y_gaia[in_frame]
         catalogdata = hstack([catalogdata[in_frame], t])
@@ -326,9 +335,11 @@ class Source:
                 time.sleep(10)
                 print(f'Trying Gaia search again. Coord = {coord}, radius = {radius}')
 
-def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=False):
+def ffi(ccd=1, camera=1, orbit=1, sector=1, size=150, local_directory='', producing_mask=False):
     """
     Generate Source object from the calibrated FFI downloaded directly from MAST
+    :param orbit: int, required
+    TESS orbit  number
     :param sector: int, required
     TESS sector number
     :param camera: int, required
@@ -425,6 +436,9 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
             exposure = int(hdul[0].header['EXPTIME'])
             break
 
+    catalogs_directory = f"{local_directory}catalogs/"
+    gaia_catalog = QTable.read(f"{catalogs_directory}Gaia_camera{camera}.ecsv")
+    tic_catalog = QTable.read(f"{catalogs_directory}TIC_camera{camera}.ecsv")
 
     # 95*95 cuts with 2 pixel redundant, (22*22 cuts)
     # try 77*77 with 4 redundant, (28*28 cuts)
@@ -438,7 +452,8 @@ def ffi(ccd=1, camera=1, sector=1, size=150, local_directory='', producing_mask=
                 pass
             else:
                 with open(source_path, 'wb') as output:
-                    source = Source(x=i * (size - 4), y=j * (size - 4), flux=flux, mask=mask, sector=sector,
-                                    time=time, size=size, quality=quality, wcs=wcs, camera=camera, ccd=ccd,
-                                    exposure=exposure, cadence=cadence, catalogs_directory=f"{local_directory}catalogs/")
+                    source = Source(x=i * (size - 4), y=j * (size - 4), flux=flux, mask=mask, orbit=orbit,
+                                    sector=sector, time=time, size=size, quality=quality, wcs=wcs,
+                                    camera=camera, ccd=ccd, exposure=exposure, cadence=cadence,
+                                    gaia_catalog=gaia_catalog, tic_catalog=tic_catalog)
                     pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)

@@ -17,6 +17,56 @@ Astropy units equivalency for TESS pixels taken from Ricker et al, 2014, S4.1, t
 See <https://doi.org/10.1117/1.JATIS.1.1.014003>.
 """
 
+TESS_PIXEL_SATURATION_LEVEL = 2e5 * u.electron
+"""
+TESS pixel saturation level, from the TESS Instrument Handbook, p37.
+
+See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
+"""
+
+
+def convert_tess_flux_to_tess_magnitude(flux: u.Quantity) -> npt.ArrayLike:
+    """
+    Convert TESS flux values (e-/s) to TESS magnitude.
+
+    Conversion is based on the reference flux of 15,000 e-/s for a star of TESS magnitude 10 given in
+    the TESS Instrument Handbook, p. 37. The conversion is therefore given by
+    $$
+        m = -2.5 \\log_{10}(F / 15,000) + 10
+    $$
+    See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
+    """
+    return (-2.5 * np.log10(flux / (15_000 * u.electron / u.second)) + 10).value
+
+
+def convert_tess_magnitude_to_tess_flux(magnitude: npt.ArrayLike) -> u.Quantity:
+    """
+    Convert TESS magnitude to TESS flux values (e-/s).
+
+    Conversion is based on the reference flux of 15,000 e-/s for a star of TESS magnitude 10 given in
+    the TESS Instrument Handbook, p. 37. The conversion is therefore given by
+    $$
+        F = 15,000 \\cdot \\exp_{10}((m - 10) / -2.5)\\ e^-/s
+    $$
+    See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
+    """
+    return (15_000 * u.electron / u.second) * 10 ** ((magnitude - 10) / -2.5)
+
+
+def get_exposure_time_from_sector(sector: int) -> u.Quantity:
+    """Get exposure time (in seconds) for the given sector."""
+    if sector <= 0:
+        raise ValueError(f"No exposure time for sector {sector} - TESS sectors start at 1.")
+    if sector < 27:
+        # Primary mission
+        return 1800 * u.second
+    elif sector < 56:
+        # First extended mission
+        return 600 * u.second
+    else:
+        # Second extended mission and beyond
+        return 200 * u.second
+
 
 def convert_gaia_mags_to_tmag(
     G: npt.ArrayLike, Gbp: npt.ArrayLike, Grp: npt.ArrayLike
@@ -87,7 +137,9 @@ class TESSJD(TimeFromEpoch):
 
 
 def apply_barycentric_correction(
-    tjd: npt.ArrayLike, coord: SkyCoord, spacecraft_position: u.km.physical_type
+    tjd: npt.ArrayLike,
+    coord: SkyCoord,
+    spacecraft_position: u.Quantity["length"],  # noqa: F821
 ) -> Time:
     """
     Apply barycentric time correction to TESS spacecraft timestamps.

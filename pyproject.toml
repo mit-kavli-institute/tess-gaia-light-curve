@@ -17,6 +17,7 @@ requires-python = ">=3.8, <3.13"
 dependencies = [
   "astropy>=5.1",
   "astroquery==0.4.7",
+  "h5py",
   "matplotlib",
   "numpy",
   "oauthlib",
@@ -49,7 +50,7 @@ minversion = "7.0"
 addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
 xfail_strict = true
 filterwarnings = ["error"]
-log_cli_level = "info"
+log_cli_level = "INFO"
 testpaths = ["tests"]
 
 [tool.ruff]

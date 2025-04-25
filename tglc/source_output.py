@@ -46,14 +46,16 @@ def median_mask(sector_num=26):
     return med_mask
 
 
-def cut_ffi_(i, sector=1, size=150, local_directory=''):
-    ffi(camera=1 + i // 4, ccd=1 + i % 4, sector=sector, size=size, local_directory=local_directory,
-        producing_mask=False)
+def cut_ffi_(i, orbit=1, sector=1, size=150, local_directory=''):
+    ffi(camera=1 + i // 4, ccd=1 + i % 4, orbit=orbit, sector=sector, size=size,
+        local_directory=local_directory, producing_mask=False)
 
 
-def ffi_to_source(sector=1, local_directory=''):
+def ffi_to_source(orbit=1, sector=1, local_directory=''):
     """
     Cut calibrated FFI to source.pkl
+    :param orbit: int, required
+    TESS orbit number
     :param sector: int, required
     TESS sector number
     :param local_directory: string, required
@@ -67,15 +69,19 @@ def ffi_to_source(sector=1, local_directory=''):
     os.makedirs(f'{local_directory}mask/', exist_ok=True)
 
     with Pool(1) as p:
-        p.map(partial(cut_ffi_, sector=sector, size=150, local_directory=local_directory), range(16))
+        p.map(
+            partial(cut_ffi_, orbit=orbit, sector=sector, size=150, local_directory=local_directory),
+            range(16)
+        )
 
     # for i in range(16):
     #     ffi(camera=1 + i // 4, ccd=1 + i % 4, sector=sector, size=150, local_directory=local_directory)
 
 
 if __name__ == '__main__':
+    orbit = 119
     sector = 56
-    ffi_to_source(sector=sector, local_directory=f'/home/tehan/data/sector{sector:04d}/')
+    ffi_to_source(orbit=orbit, sector=sector, local_directory=f'/home/tehan/data/sector{sector:04d}/')
     # med_mask = median_mask(sector_num=26)
     # ffi_to_source(sector=sector, local_directory=f'/pdo/users/tehan/sector{sector:04d}/')
     # files = glob.glob(f'/home/tehan/data/sector{sector:04d}/source/*/source_00_00.pkl')

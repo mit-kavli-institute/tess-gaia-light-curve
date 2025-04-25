@@ -2,17 +2,26 @@
 # https://dev.to/kapilgorve/set-environment-variable-in-windows-and-wsl-linux-in-terminal-3mg4
 
 import os
+from pathlib import Path
 import warnings
 import numpy as np
 import numpy.ma as ma
 import tglc
 import matplotlib.pyplot as plt
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
+from astropy.table import hstack, QTable
+from astropy.time import Time
+from astropy import units as u
 from tqdm import trange
 from os.path import exists
-from tglc.effective_psf import get_psf, fit_psf, fit_lc, fit_lc_float_field, bg_mod
+from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
+from tglc.aperture_photometry import get_normalized_aperture_photometry
+from tglc.effective_psf import get_psf, fit_psf, fit_lc, fit_lc_float_field
 from tglc.ffi import Source
 from tglc.ffi_cut import Source_cut
+from tglc.util.constants import TESSJD, apply_barycentric_correction
+from tglc.util.tess_ephemeris import get_tess_spacecraft_position
 
 warnings.simplefilter('always', UserWarning)
 
@@ -42,7 +51,7 @@ def lc_output(source, local_directory='', index=0, time=None, psf_lc=None, cal_p
     :return:
     """
     if transient is None:
-        objid = [int(s) for s in (source.gaia[index]['DESIGNATION']).split() if s.isdigit()][0]
+        objid = [int(s) for s in (source.gaia[index]['designation']).split() if s.isdigit()][0]
     else:
         objid = transient[0]
     source_path = f'{local_directory}hlsp_tglc_tess_ffi_gaiaid-{objid}-s{source.sector:04d}-cam{source.camera}-ccd{source.ccd}_tess_v1_llc.fits'
@@ -71,7 +80,7 @@ def lc_output(source, local_directory='', index=0, time=None, psf_lc=None, cal_p
     if np.isnan(cal_aper_err):
         cal_aper_err = 'NaN'
     try:
-        ticid = str(source.tic['TIC'][np.where(source.tic['dr3_source_id'] == objid)][0])
+        ticid = str(source.tic['TIC'][np.where(source.tic['gaia_designation'] == objid)][0])
     except:
         ticid = ''
     try:
@@ -106,7 +115,7 @@ def lc_output(source, local_directory='', index=0, time=None, psf_lc=None, cal_p
         fits.Card('TELESCOP', 'TESS', 'telescope'),
         fits.Card('INSTRUME', 'TESS Photometer', 'detector type'),
         fits.Card('FILTER', 'TESS', 'the filter used for the observations'),
-        fits.Card('OBJECT', source.gaia[index]['DESIGNATION'], 'string version of Gaia DR3 ID'),
+        fits.Card('OBJECT', source.gaia[index]['designation'], 'string version of Gaia DR3 ID'),
         fits.Card('GAIADR3', objid, 'integer version of Gaia DR3 ID'),
         fits.Card('TICID', ticid, 'TESS Input Catalog ID'),
         fits.Card('SECTOR', source.sector, 'observation sector'),
@@ -165,7 +174,7 @@ def lc_output(source, local_directory='', index=0, time=None, psf_lc=None, cal_p
     table_hdu.header.append(('TELESCOP', 'TESS', 'telescope'), end=True)
     table_hdu.header.append(('INSTRUME', 'TESS Photometer', 'detector type'), end=True)
     table_hdu.header.append(('FILTER', 'TESS', 'the filter used for the observations'), end=True)
-    table_hdu.header.append(('OBJECT', source.gaia[index]['DESIGNATION'], 'string version of Gaia DR3 ID'),
+    table_hdu.header.append(('OBJECT', source.gaia[index]['designation'], 'string version of Gaia DR3 ID'),
                             end=True)
     table_hdu.header.append(('GAIADR3', objid, 'integer version of GaiaDR3 designation'), end=True)
     table_hdu.header.append(('RADESYS', 'ICRS', 'reference frame of celestial coordinates'), end=True)
@@ -287,12 +296,12 @@ def epsf(source, psf_size=11, factor=2, local_directory='', target=None, cut_x=0
     end = num_stars
     if name is not None:
         try:
-            start = int(np.where(source.gaia['DESIGNATION'] == 'Gaia DR3 ' +
-                                 str(source.tic['dr3_source_id'][np.where(source.tic['TIC'] == name)][0]))[0][0])
+            start = int(np.where(source.gaia['designation'] == 'Gaia DR3 ' +
+                                 str(source.tic['gaia_designation'][np.where(source.tic['TIC'] == name)][0]))[0][0])
             end = start + 1
         except:
             try:
-                start = int(np.where(source.gaia['DESIGNATION'] == name)[0][0])
+                start = int(np.where(source.gaia['designation'] == name)[0][0])
                 end = start + 1
             except IndexError:
                 print(
@@ -301,6 +310,11 @@ def epsf(source, psf_size=11, factor=2, local_directory='', target=None, cut_x=0
                     f' DR3 ID agrees with your target.')
                 start = 0
                 end = 1
+    
+    tess_spacecraft_position = get_tess_spacecraft_position(
+        source.sector, Time(source.time, format="tjd", scale="tdb")
+    )
+
     for i in trange(start, end, desc='Fitting lc', disable=no_progress_bar):
         if x_left <= x_round[i] < source.size - x_right and y_left <= y_round[i] < source.size - y_right:
             if type(source) == Source:
@@ -315,57 +329,82 @@ def epsf(source, psf_size=11, factor=2, local_directory='', target=None, cut_x=0
                 near_edge = True
 
             if type(prior) == float or type(prior) == np.float64:
-                aperture, psf_lc, star_y, star_x, portion = \
+                aperture, psf_lc, star_y, star_x, psf_portions = \
                     fit_lc_float_field(A, source, star_info=star_info, x=x_round, y=y_round, star_num=i, e_psf=e_psf,
                                        near_edge=near_edge, prior=prior)
             else:
-                aperture, psf_lc, star_y, star_x, portion, target_5x5, field_stars_5x5 = \
+                aperture, psf_lc, star_y, star_x, psf_portions, target_5x5, field_stars_5x5 = \
                     fit_lc(A, source, star_info=star_info, x=x_round[i], y=y_round[i], star_num=i, e_psf=e_psf,
                            near_edge=near_edge)
-            aper_lc = np.sum(
-                aperture[:, max(0, star_y - 1):min(5, star_y + 2), max(0, star_x - 1):min(5, star_x + 2)],
-                axis=(1, 2))
-            if source.sector < 27:  # primary
-                exposure_time = 1800
-            elif source.sector < 56:  # first extended
-                exposure_time = 600
-            else:  # second extended
-                exposure_time = 200
-            saturated_arg_aper = np.where(aper_lc > 1e5 * 9 * 2e5 / exposure_time)  # saturation is 2e5 e-
-            aper_lc[saturated_arg_aper] = np.nan
-            saturated_arg_psf = np.where(psf_lc > 1e5 * 9 * 2e5 / exposure_time)
-            psf_lc[saturated_arg_psf] = np.nan
 
-            local_bg, aper_lc, psf_lc, cal_aper_lc, cal_psf_lc = bg_mod(source, q=index, portion=portion,
-                                                                        psf_lc=psf_lc,
-                                                                        aper_lc=aper_lc,
-                                                                        near_edge=near_edge, star_num=i)
-            background_ = background[x_round[i] + source.size * y_round[i], :]
-            quality = np.zeros(len(source.time), dtype=np.int16)
-            sigma = 1.4826 * np.nanmedian(np.abs(background_ - np.nanmedian(background_)))
-            quality[abs(background_ - np.nanmedian(background_)) >= 5 * sigma] += 1
-            # if cut_x == 7:
-            #     lc_directory = f'{local_directory}lc/{source.camera}-{source.ccd}_extra/'
-            #     os.makedirs(lc_directory, exist_ok=True)
-            if np.isnan(aper_lc).all():
+            sky_coord = SkyCoord(source.gaia["ra"][i], source.gaia["dec"][i], unit="deg")
+            time_btjd = apply_barycentric_correction(
+                source.time, sky_coord, tess_spacecraft_position
+            )
+            aperture_photometry_data = [
+                get_normalized_aperture_photometry(
+                    aperture,
+                    np.array(source.quality) | quality_raw,
+                    aperture_size,
+                    star_x,
+                    star_y,
+                    source.gaia["tess_mag"][i],
+                    source.exposure * u.second,
+                    psf_portions,
+                    column_name_prefix=f"{aperture_name}_aperture_"
+                )
+                for aperture_name, aperture_size in [("primary", 3), ("small", 1), ("large", 5)]
+            ]
+            for aperture_name, table in zip(["primary", "small", "large"], aperture_photometry_data):
+                # ccd_x is start of cutout in CCD, x_round is position of star in cutout, star_x is
+                # position of star in aperture, centroid is position of centroid in aperture.
+                table[f"{aperture_name}_aperture_centroid_x"] += (
+                    (source.ccd_x + x_round[i] - star_x) * u.pixel
+                )
+                table[f"{aperture_name}_aperture_centroid_y"] += (
+                    (source.ccd_y + y_round[i] - star_y) * u.pixel
+                )
+
+            background_light_curve = background[x_round[i] + source.size * y_round[i], :]
+            bg_quality = np.zeros(len(source.time), dtype=np.int16)
+            bg_sigma = 1.4826 * np.nanmedian(np.abs(background_light_curve - np.nanmedian(background_light_curve)))
+            bg_quality[
+                abs(background_light_curve - np.nanmedian(background_light_curve)) >= 5 * bg_sigma
+            ] = 1
+
+            ccd_x = source.gaia[f"sector_{source.sector}_x"][i] + source.ccd_x
+            ccd_y = source.gaia[f"sector_{source.sector}_y"][i] + source.ccd_y
+
+            try:
+                tic_id = source.tic["TIC"][source.tic["gaia_designation"] == source.gaia["designation"][i]][0]
+            except IndexError:
+                print(f"No TIC ID found for {source.gaia['designation'][i]} in source for target {target} (tmag={source.gaia['tess_mag'][i]}).")
                 continue
-            else:
-                if type(source) == Source:
-                    # if cut_x >= 7:
-                    #     lc_directory = f'{local_directory}lc/{source.camera}-{source.ccd}_extra/'
-                    lc_output(source, local_directory=lc_directory, index=i,
-                              tess_flag=source.quality, cut_x=cut_x, cut_y=cut_y, cadence=source.cadence,
-                              aperture=aperture.astype(np.float32), star_y=y_round[i], star_x=x_round[i], tglc_flag=quality,
-                              bg=background_, time=source.time, psf_lc=psf_lc, cal_psf_lc=cal_psf_lc, aper_lc=aper_lc,
-                              cal_aper_lc=cal_aper_lc, local_bg=local_bg, x_aperture=x_aperture[i],
-                              y_aperture=y_aperture[i], near_edge=near_edge, save_aper=save_aper, portion=portion,
-                              prior=prior)
-                else:
-                    lc_output(source, local_directory=lc_directory, index=i,
-                              tess_flag=source.quality, cut_x=cut_x, cut_y=cut_y, cadence=source.cadence,
-                              aperture=aperture.astype(np.float32), star_y=y_round[i], star_x=x_round[i],
-                              tglc_flag=quality,
-                              bg=background_, time=source.time, psf_lc=psf_lc, cal_psf_lc=cal_psf_lc, aper_lc=aper_lc,
-                              cal_aper_lc=cal_aper_lc, local_bg=local_bg, x_aperture=x_aperture[i],
-                              y_aperture=y_aperture[i], near_edge=near_edge, save_aper=save_aper, portion=portion,
-                              prior=prior, transient=source.transient, target_5x5=target_5x5, field_stars_5x5=field_stars_5x5)
+
+            light_curve_meta = ApertureLightCurveMetadata(
+                tic_id=tic_id,
+                orbit=source.orbit,
+                sector=source.sector,
+                camera=source.camera,
+                ccd=source.ccd,
+                ccd_x=ccd_x,
+                ccd_y=ccd_y,
+                sky_coord=sky_coord,
+                tess_magnitude=source.gaia["tess_mag"][i],
+                exposure_time=source.exposure * u.second,
+            )
+
+            base_light_curve = QTable(
+                {
+                    "time": time_btjd,
+                    "cadence": source.cadence,
+                    "quality_flag": bg_quality,
+                    "background_flux": background_light_curve,
+                }
+            )
+
+            light_curve = ApertureLightCurve(
+                hstack(aperture_photometry_data + [base_light_curve]),
+                meta=light_curve_meta,
+            )
+            light_curve.write_hdf5(Path(lc_directory) / f"{tic_id}.h5")
