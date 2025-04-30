@@ -73,10 +73,10 @@ def _run_tic_cone_query(
         TICEntry.c.rad < 0.8,
     )
 
-    tic_cone_query = base_query.where(tic.in_cone("ticentries", ra, dec, width=18.0)).where(
+    tic_cone_query = base_query.where(tic.in_cone("ticentries", ra, dec, width=radius)).where(
         sa.or_(magnitude_filter, mdwarf_filter)
     )
-    logger.debug(f"Querying TIC via Pyticdb for {radius:.2f}deg cone around {ra=:.2f}, {dec=:2f}")
+    logger.debug(f"Querying TIC via Pyticdb for {radius:.2f}deg cone around {ra=:.2f}, {dec=:.2f}")
     return tic.to_df(tic_cone_query)
 
 
@@ -118,13 +118,13 @@ def get_tic_catalog_data(
             _run_tic_cone_query, _get_camera_query_grid_coordinates(ra, dec), nprocs=nprocs
         )
     )
-    tic_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
+    tic_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("id"))
     tic_data["ra"].unit = u.deg
     tic_data["dec"].unit = u.deg
     tic_data["pmra"].unit = u.mas / u.yr
     tic_data["pmdec"].unit = u.mas / u.yr
     logger.debug(
-        f"Found {len(tic_data)} stars for camera {camera} after applying magnitude "
+        f"Found {len(tic_data)} TIC stars for camera {camera} after applying magnitude "
         f"(<{magnitude_cutoff} Tmag) and M dwarf (<{mdwarf_magnitude_cutoff} Tmag, <4,000K T_eff, "
         "<0.8 solar rad) filters"
     )
@@ -145,7 +145,7 @@ def _run_gaia_cone_query(radec: tuple[float, float], radius: float = 5.0) -> pd.
         "gaia_source",
         ra,
         dec,
-        18.0,
+        radius,
         *(field.lower() for field in GAIA_CATALOG_FIELDS),
         as_query=True,
     )
