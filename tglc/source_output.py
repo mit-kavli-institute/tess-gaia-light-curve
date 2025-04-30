@@ -47,8 +47,8 @@ def median_mask(sector_num=26):
 
 
 def cut_ffi_(i, orbit=1, sector=1, size=150, local_directory=''):
-    ffi(camera=1 + i // 4, ccd=1 + i % 4, orbit=orbit, sector=sector, size=size,
-        local_directory=local_directory, producing_mask=False)
+    ffi(camera=1 + i // 4, ccd=1 + i % 4, orbit=orbit, sector=sector, cutout_size=size,
+        base_directory=local_directory, produce_mask=False)
 
 
 def ffi_to_source(orbit=1, sector=1, local_directory=''):

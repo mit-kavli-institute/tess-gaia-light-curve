@@ -30,3 +30,5 @@ def setup_logging(debug: bool = False, logfile: Path | None = None):
     base_tglc_logger = logging.getLogger()
     base_tglc_logger.setLevel(log_level)
     base_tglc_logger.addHandler(handler)
+
+    logging.captureWarnings(True)

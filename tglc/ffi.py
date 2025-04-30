@@ -1,70 +1,28 @@
-import json
-import os
+from functools import partial
+from importlib import resources
+from itertools import product
+import logging
+from pathlib import Path
 import pickle
-import sys
-import astropy.units as u
-import numpy as np
-import pkg_resources
-import requests
-import time
+import warnings
 
-from glob import glob
-from os.path import exists
-from urllib.parse import quote as urlencode
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
-from astropy.table import Table, QTable, hstack, Column, MaskedColumn
+from astropy.table import Column, MaskedColumn, QTable, Table, hstack
 from astropy.time import Time
+import astropy.units as u
+from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS
-from astroquery.gaia import Gaia
+from erfa.core import ErfaWarning
+import numpy as np
 from scipy import ndimage
-from tqdm import tqdm, trange
 
+from tglc.util import data
 from tglc.util.constants import convert_gaia_mags_to_tmag
-
-Gaia.ROW_LIMIT = -1
-Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source"  # TODO: dr3 MJD = 2457388.5, TBJD = 388.5
+from tglc.util.multiprocessing import pool_map_if_multiprocessing_with_tqdm
 
 
-# The next three functions are adopted from astroquery MAST API https://mast.stsci.edu/api/v0/pyex.html#incPy
-def mast_query(request):
-    """Perform a MAST query.
-
-        Parameters
-        ----------
-        request (dictionary): The MAST request json object
-
-        Returns head,content where head is the response HTTP headers, and content is the returned data"""
-
-    # Base API url
-    request_url = 'https://mast.stsci.edu/api/v0/invoke'
-    # Grab Python Version
-    version = ".".join(map(str, sys.version_info[:3]))
-    # Create Http Header Variables
-    headers = {"Content-type": "application/x-www-form-urlencoded",
-               "Accept": "text/plain",
-               "User-agent": "python-requests/" + version}
-    # Encoding the request as a json string
-    req_string = json.dumps(request)
-    req_string = urlencode(req_string)
-    # Perform the HTTP request
-    resp = requests.post(request_url, data="request=" + req_string, headers=headers)
-    # Pull out the headers and response content
-    head = resp.headers
-    content = resp.content.decode('utf-8')
-    return head, content
-
-
-def mast_json2table(json_obj):
-    data_table = Table()
-    for col, atype in [(x['name'], x['type']) for x in json_obj['fields']]:
-        if atype == "string":
-            atype = "str"
-        if atype == "boolean":
-            atype = "bool"
-        data_table[col] = np.array([x.get(col, None) for x in json_obj['data']], dtype=atype)
-    return data_table
-
+logger = logging.getLogger(__name__)
 
 
 def crossmatch_tic_to_gaia(
@@ -124,7 +82,11 @@ def crossmatch_tic_to_gaia(
     )
     pm_adjusted_tic_coords = tic_coords.apply_space_motion(Time("J2016"))
     gaia_coords = SkyCoord(gaia["ra"], gaia["dec"])
-    match_idx, match_dist_angle, _match_dist_3d = pm_adjusted_tic_coords.match_to_catalog_sky(gaia_coords)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ErfaWarning)
+        match_idx, match_dist_angle, _match_dist_3d = pm_adjusted_tic_coords.match_to_catalog_sky(
+            gaia_coords
+        )
 
     close_matches = match_dist_angle <= match_angular_distance_tolerance
 
@@ -145,7 +107,7 @@ def crossmatch_tic_to_gaia(
 
 # from Tim
 def background_mask(im=None):
-    imfilt = im * 1.
+    imfilt = im * 1.0
     for i in range(im.shape[1]):
         imfilt[:, i] = ndimage.percentile_filter(im[:, i], 50, size=51)
 
@@ -178,9 +140,22 @@ def background_mask(im=None):
 
 class Source:
     def __init__(
-        self, x=0, y=0,
-        flux=None, time=None, wcs=None, quality=None, mask=None, exposure=1800,
-        orbit=0, sector=0, size=150, camera=1, ccd=1, cadence=None, gaia_catalog=None,
+        self,
+        x=0,
+        y=0,
+        flux=None,
+        time=None,
+        wcs=None,
+        quality=None,
+        mask=None,
+        exposure=1800,
+        orbit=0,
+        sector=0,
+        size=150,
+        camera=1,
+        ccd=1,
+        cadence=None,
+        gaia_catalog=None,
         tic_catalog=None,
     ):
         """
@@ -237,14 +212,18 @@ class Source:
 
         # Load catalog files and find relevant stars
         gaia_sky_coordinates = SkyCoord(gaia_catalog["ra"], gaia_catalog["dec"])
-        gaia_x, gaia_y = wcs.world_to_pixel(gaia_sky_coordinates)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ErfaWarning)
+            gaia_x, gaia_y = wcs.world_to_pixel(gaia_sky_coordinates)
         gaia_x_in_source = (self.ccd_x <= gaia_x) & (gaia_x <= self.ccd_x + size)
         gaia_y_in_source = (self.ccd_y <= gaia_y) & (gaia_y <= self.ccd_y + size)
         gaia_in_source = gaia_x_in_source & gaia_y_in_source
         catalogdata = gaia_catalog[gaia_in_source]
 
         tic_sky_coordinates = SkyCoord(tic_catalog["ra"], tic_catalog["dec"])
-        tic_x, tic_y = wcs.world_to_pixel(tic_sky_coordinates)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ErfaWarning)
+            tic_x, tic_y = wcs.world_to_pixel(tic_sky_coordinates)
         tic_x_in_source = (self.ccd_x <= tic_x) & (tic_x <= self.ccd_x + size)
         tic_y_in_source = (self.ccd_y <= tic_y) & (tic_y <= self.ccd_y + size)
         tic_in_source = tic_x_in_source & tic_y_in_source
@@ -253,7 +232,9 @@ class Source:
         # Cross match TIC and Gaia
         tic_match_table = Table()
         tic_match_table.add_column(catalogdata_tic["id"], name="TIC")
-        tic_match_table.add_column(crossmatch_tic_to_gaia(catalogdata_tic, catalogdata), name="gaia_designation")
+        tic_match_table.add_column(
+            crossmatch_tic_to_gaia(catalogdata_tic, catalogdata), name="gaia_designation"
+        )
         self.tic = tic_match_table
 
         # TODO remove this at some point, but right now units aren't expected downstream
@@ -263,8 +244,8 @@ class Source:
             else:
                 catalogdata[name] = Column(col.data)
 
-        self.flux = flux[:, y:y + size, x:x + size]
-        self.mask = mask[y:y + size, x:x + size]
+        self.flux = flux[:, y : y + size, x : x + size]
+        self.mask = mask[y : y + size, x : x + size]
         self.time = np.array(time)
         median_time = np.median(self.time)
         interval = (median_time - 388.5) / 365.25
@@ -277,183 +258,307 @@ class Source:
         y_gaia = np.zeros(num_gaia)
         tess_mag = np.zeros(num_gaia)
         in_frame = [True] * num_gaia
-        for i, designation in enumerate(catalogdata['designation']):
-            ra = catalogdata['ra'][i]
-            dec = catalogdata['dec'][i]
-            if not np.isnan(catalogdata['pmra'].mask[i]):  # masked?
-                ra += catalogdata['pmra'][i] * np.cos(np.deg2rad(dec)) * interval / 1000 / 3600
-            if not np.isnan(catalogdata['pmdec'].mask[i]):
-                dec += catalogdata['pmdec'][i] * interval / 1000 / 3600
+        for i, designation in enumerate(catalogdata["designation"]):
+            ra = catalogdata["ra"][i]
+            dec = catalogdata["dec"][i]
+            if not np.isnan(catalogdata["pmra"].mask[i]):  # masked?
+                ra += catalogdata["pmra"][i] * np.cos(np.deg2rad(dec)) * interval / 1000 / 3600
+            if not np.isnan(catalogdata["pmdec"].mask[i]):
+                dec += catalogdata["pmdec"][i] * interval / 1000 / 3600
             pixel = self.wcs.all_world2pix(
-                np.array([catalogdata['ra'][i], catalogdata['dec'][i]]).reshape((1, 2)), 0, quiet=True)
+                np.array([catalogdata["ra"][i], catalogdata["dec"][i]]).reshape((1, 2)),
+                0,
+                quiet=True,
+            )
             x_gaia[i] = pixel[0][0] - self.ccd_x
             y_gaia[i] = pixel[0][1] - self.ccd_y
             try:
-                tic_id[i] = catalogdata_tic['ID'][np.where(catalogdata_tic['GAIA'] == designation.split()[2])[0][0]]
+                tic_id[i] = catalogdata_tic["ID"][
+                    np.where(catalogdata_tic["GAIA"] == designation.split()[2])[0][0]
+                ]
             except:
                 tic_id[i] = np.nan
-            if np.isnan(catalogdata['phot_g_mean_mag'][i]):
+            if np.isnan(catalogdata["phot_g_mean_mag"][i]):
                 in_frame[i] = False
-            elif catalogdata['phot_g_mean_mag'][i] >= 25:
+            elif catalogdata["phot_g_mean_mag"][i] >= 25:
                 in_frame[i] = False
             elif -4 < x_gaia[i] < self.size + 3 and -4 < y_gaia[i] < self.size + 3:
-                dif = catalogdata['phot_bp_mean_mag'][i] - catalogdata['phot_rp_mean_mag'][i]
-                tess_mag[i] = catalogdata['phot_g_mean_mag'][
-                                  i] - 0.00522555 * dif ** 3 + 0.0891337 * dif ** 2 - 0.633923 * dif + 0.0324473
+                dif = catalogdata["phot_bp_mean_mag"][i] - catalogdata["phot_rp_mean_mag"][i]
+                with warnings.catch_warnings():
+                    # Warnings for for masked value conversion to nan
+                    warnings.simplefilter("ignore", UserWarning)
+                    tess_mag[i] = (
+                        catalogdata["phot_g_mean_mag"][i]
+                        - 0.00522555 * dif**3
+                        + 0.0891337 * dif**2
+                        - 0.633923 * dif
+                        + 0.0324473
+                    )
                 if np.isnan(tess_mag[i]):
-                    tess_mag[i] = catalogdata['phot_g_mean_mag'][i] - 0.430
+                    tess_mag[i] = catalogdata["phot_g_mean_mag"][i] - 0.430
                 if np.isnan(tess_mag[i]):
                     in_frame[i] = False
             else:
                 in_frame[i] = False
 
-        tess_flux = 10 ** (- tess_mag / 2.5)
+        tess_flux = 10 ** (-tess_mag / 2.5)
         t = Table()
-        t[f'tess_mag'] = tess_mag[in_frame]
-        t[f'tess_flux'] = tess_flux[in_frame]
-        t[f'tess_flux_ratio'] = tess_flux[in_frame] / (
+        t["tess_mag"] = tess_mag[in_frame]
+        t["tess_flux"] = tess_flux[in_frame]
+        t["tess_flux_ratio"] = tess_flux[in_frame] / (
             np.nanmax(tess_flux[in_frame]) if len(tess_flux[in_frame]) > 0 else 1
         )
-        t[f'sector_{self.sector}_x'] = x_gaia[in_frame]
-        t[f'sector_{self.sector}_y'] = y_gaia[in_frame]
+        t[f"sector_{self.sector}_x"] = x_gaia[in_frame]
+        t[f"sector_{self.sector}_y"] = y_gaia[in_frame]
         catalogdata = hstack([catalogdata[in_frame], t])
-        catalogdata.sort('tess_mag')
+        catalogdata.sort("tess_mag")
         self.gaia = catalogdata
 
-    def search_gaia(self, x, y, co1, co2):
-        coord = self.wcs.pixel_to_world([x + co1 + 44], [y + co2])[0].to_string()
-        radius = u.Quantity((self.size / 2 + 4) * 21 * 0.707 / 3600, u.deg)
-        attempt = 0
-        while attempt < 5:
-            try:
-                catalogdata = Gaia.cone_search_async(coord, radius=radius,
-                                             columns=['DESIGNATION', 'phot_g_mean_mag', 'phot_bp_mean_mag',
-                                                      'phot_rp_mean_mag', 'ra', 'dec', 'pmra', 'pmdec']).get_results()
-                return catalogdata
-            except:
-                attempt += 1
-                time.sleep(10)
-                print(f'Trying Gaia search again. Coord = {coord}, radius = {radius}')
 
-def ffi(ccd=1, camera=1, orbit=1, sector=1, size=150, local_directory='', producing_mask=False):
+def _get_science_pixel_limits(scipixs_string: str) -> tuple[int, int, int, int]:
     """
-    Generate Source object from the calibrated FFI downloaded directly from MAST
-    :param orbit: int, required
-    TESS orbit  number
-    :param sector: int, required
-    TESS sector number
-    :param camera: int, required
-    camera number
-    :param ccd: int, required
-    ccd number
-    :param size: int, optional
-    size of the FFI cut, default size is 150. Recommend large number for better quality.
-    :param local_directory: string, required
-    path to the FFI folder
-    :return:
-    """
-    # input_files = glob(f'/pdo/spoc-data/sector-{sector:03d}/ffi*/**/*{camera}-{ccd}-????-?_ffic.fits*')
-    input_files = glob(f'{local_directory}ffi/*cam{camera}-ccd{ccd}*_img.fits')
-    print('camera: ' + str(camera) + '  ccd: ' + str(ccd) + '  num of files: ' + str(len(input_files)))
-    time = []
-    quality = []
-    cadence = []
-    flux = np.empty((len(input_files), 2048, 2048), dtype=np.float32)
-    for i, file in enumerate(tqdm(input_files)):
-        try:
-            with fits.open(file, mode='denywrite', memmap=False) as hdul:
-                quality_flag = (
-                    (hdul[0].header['COARSE'] << 2)
-                    & (hdul[0].header['RW_DESAT'] << 5)
-                    & (hdul[0].header[f'STRAYLT{camera}'])
-                )
-                quality.append(quality_flag)
-                cadence.append(hdul[0].header['CADENCE'])
-                flux[i] = hdul[0].data[0:2048, 44:2092]
-                time.append(hdul[0].header['MIDTJD'])
+    Parse string of the form `"[min_x:max_x,min_y:max_y]"`.
 
-        except:
-            print(f'Corrupted file {file}, download again ...')
-            response = requests.get(
-                f'https://mast.stsci.edu/api/v0.1/Download/file/?uri=mast:TESS/product/{os.path.basename(file)}')
-            open(file, 'wb').write(response.content)
-            with fits.open(file, mode='denywrite', memmap=False) as hdul:
-                quality_flag = (
-                    (hdul[0].header['COARSE'] << 2)
-                    & (hdul[0].header['RW_DESAT'] << 5)
-                    & (hdul[0].header[f'STRAYLT{camera}'])
+    TICA FFI FITS headers have a "SCIPIXS" keyword indicating which pixels are science pixels
+    (rather than buffer rows/columns) of the form indicated above.
+
+    Note
+    ----
+    The string in TICA headers is 1-indexed, but the pixel coordinates are converted to 0-indexed
+    values for use with data arrays in this function. So, the science data from the detector is
+    obtained by
+    ```python
+    science_data = data[min_y:max_y + 1, min_x:max_x + 1]
+    ```
+    where `data` is the primary extension data from the TICA FFI FITS file.
+
+    Returns
+    -------
+    (min_x, max_x, min_y, max_y) : tuple[int, int, int, int]
+        Tuple containing science pixel limits (inclusive)
+    """
+    x_range, y_range = scipixs_string.strip("[]").split(",")
+    min_x, max_x = map(int, x_range.split(":"))
+    min_y, max_y = map(int, y_range.split(":"))
+    return (min_x - 1, max_x - 1, min_y - 1, max_y - 1)
+
+
+def _get_ffi_header_data_and_flux(
+    ffi_file: Path, camera: int
+) -> tuple[int, int, float, np.ndarray]:
+    """
+    Harvest important header values and pixel flux values from a TICA FFI file.
+
+    Parameters
+    ----------
+    ffi_file : Path
+        Path to FFI FITS file to read.
+    camera : int
+        Camera of FFI. Needed to read stray light header value.
+
+    Returns
+    -------
+    (quality, cadence, time, flux) : tuple[int, int, float, array_like]
+        Tuple containing quality flag, cadence, and time values pulled from header and flux array
+        taken from science pixels.
+    """
+    try:
+        with warnings.catch_warnings():
+            # TICA FITS headers get wrangled by Astropy, but it creates no problems
+            warnings.simplefilter("ignore", AstropyWarning)
+            with fits.open(ffi_file, mode="readonly", memmap=False) as hdulist:
+                primary_header = hdulist[0].header
+                # Map quality indicators to bits that align with FFI quality flags.
+                # See https://archive.stsci.edu/missions/tess/doc/EXP-TESS-ARC-ICD-TM-0014-Rev-F.pdf?page=56
+                quality = (
+                    (primary_header["COARSE"] << 2)
+                    & (primary_header["RW_DESAT"] << 5)
+                    & (primary_header[f"STRAYLT{camera}"] << 11)
                 )
-                quality.append(quality_flag)
-                cadence.append(hdul[0].header['CADENCE'])
-                flux[i] = hdul[0].data[0:2048, 44:2092]
-                time.append(hdul[0].header['MIDTJD'])
-    time_order = np.argsort(np.array(time))
-    time = np.array(time)[time_order]
+                cadence = primary_header["CADENCE"]
+                time = primary_header["MIDTJD"]
+                min_x, max_x, min_y, max_y = _get_science_pixel_limits(primary_header["SCIPIXS"])
+                flux = hdulist[0].data[min_y : max_y + 1, min_x : max_x + 1]
+        return (quality, cadence, time, flux)
+    except Exception as e:
+        logger.warning(f"Invalid FFI file {ffi_file.resolve()}: got error {e}")
+        return (0, 0, np.nan, np.full((2048, 2048), np.nan))
+
+
+def _make_source_and_write_pickle(
+    xy: tuple[int, int], output_directory: Path, replace: bool, **kwargs
+):
+    """
+    Construct source object and write pickle file.
+
+    Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
+    unpacks `x` and `y` from the first argument.
+    """
+    x, y = xy
+    output_file = output_directory / f"source_{x:02d}_{y:02d}.pkl"
+    if not replace and (output_file.is_file() and output_file.stat().st_size > 0):
+        logger.debug(
+            f"Source file for camera {kwargs['camera']}, CCD {kwargs['ccd']}, {x}_{y} already exists, skipping"
+        )
+        return
+    kwargs["x"] = x * (kwargs["size"] - 4)
+    kwargs["y"] = y * (kwargs["size"] - 4)
+    source = Source(**kwargs)
+    with open(output_file, "wb") as output:
+        pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)
+
+
+def ffi(
+    camera: int,
+    ccd: int,
+    orbit: int,
+    sector: int,
+    base_directory: Path,
+    cutout_size: int = 150,
+    produce_mask: bool = False,
+    nprocs: int = 1,
+    replace: bool = False,
+):
+    """
+    Produce `Source` object pickle file from calibrated FFI files.
+
+    Within `base_directory`, the `source/{camera}-{ccd}/` directory is created and populated. If
+    `produce_mask` is `True`, the `mask/` directory is created and populated instead.
+
+    Parameters
+    ----------
+    camera, ccd : int
+        TESS camera and CCD of FFIs that should be used.
+    orbit, sector : int
+        TESS orbit and sector containing the orbit of the FFI observations.
+    base_directory : Path
+        Base path to contain data products. Should contain populated `catalogs/` and `ffi/`
+        subdirectories.
+    cutout_size : int
+        Side length of cutouts. Large numbers recommended for better quality. Default = 150.
+    produce_mask : bool
+        Produce CCD mask instead of making cutout `Source` objects.
+    nprocs : int
+        Processes to use for in multiprocessing pool. Default = 1.
+    replace : bool
+        Replace existing files with new data. Default = False.
+    """
+    base_directory = Path(base_directory)
+    ffi_directory = base_directory / "ffi"
+    ffi_files = list(ffi_directory.glob(f"*cam{camera}-ccd{ccd}*_img.fits"))
+
+    if len(ffi_files) == 0:
+        logger.warning(f"No FFI files found for camera {camera} CCD {ccd}, skipping")
+        return
+    logger.info(f"Found {len(ffi_files)} FFI files for camera {camera} CCD {ccd}")
+
+    time = np.full_like(ffi_files, np.nan, dtype=np.float64)
+    cadence = np.zeros_like(ffi_files, dtype=np.int64)
+    quality = np.zeros_like(ffi_files, dtype=np.int32)
+    flux = np.full((len(ffi_files), 2048, 2048), np.nan, dtype=np.float32)
+    get_ffi_header_data_and_flux_for_camera = partial(_get_ffi_header_data_and_flux, camera=camera)
+    ffi_data_iterator = pool_map_if_multiprocessing_with_tqdm(
+        get_ffi_header_data_and_flux_for_camera,
+        ffi_files,
+        nprocs=nprocs,
+        pool_map_method="imap_unordered",
+        desc=f"Reading FFI files for {camera}-{ccd}",
+        unit="file",
+        total=len(ffi_files),
+    )
+    for i, (ffi_quality, ffi_cadence, ffi_time, ffi_flux) in enumerate(ffi_data_iterator):
+        quality[i] = ffi_quality
+        cadence[i] = ffi_cadence
+        time[i] = ffi_time
+        flux[i] = ffi_flux
+    time_order = np.argsort(time)
+    time = time[time_order]
+    cadence = cadence[time_order]
+    quality = quality[time_order]
     flux = flux[time_order, :, :]
-    quality = np.array(quality)[time_order]
-    cadence = np.array(cadence)[time_order]
-    # mask = np.array([True] * 2048 ** 2).reshape(2048, 2048)
-    # for i in range(len(time)):
-    #     mask[np.where(flux[i] > np.percentile(flux[i], 99.95))] = False
-    #     mask[np.where(flux[i] < np.median(flux[i]) / 2)] = False
+
     if np.min(np.diff(cadence)) != 1:
-        np.save(f'{local_directory}/Wrong_Cadence_sector{sector:04d}_cam{camera}_ccd{ccd}.npy', np.min(np.diff(cadence)))
-    if producing_mask:
-        median_flux = np.median(flux, axis=0)
+        logger.warning(f"{(np.diff(cadence) != 1).sum()} cadence gaps != 1 detected.")
+
+    # Load or save mask
+    if produce_mask:
+        median_flux = np.nanmedian(flux, axis=0)
         mask = background_mask(im=median_flux)
         mask /= ndimage.median_filter(mask, size=51)
-        np.save(f'{local_directory}mask/mask_sector{sector:04d}_cam{camera}_ccd{ccd}.npy', mask)
+        np.save(base_directory / f"mask/mask_sector{sector:04d}_cam{camera}_ccd{ccd}.npy", mask)
         return
-    # load mask
-    mask = pkg_resources.resource_stream(__name__, f'background_mask/median_mask.fits')
-    with fits.open(mask) as mask_hdul:
-        mask = mask_hdul[0].data[(camera - 1) * 4 + (ccd - 1), :]
+    mask_file = resources.files(data) / "median_mask.fits"
+    with fits.open(mask_file) as hdulist:
+        mask = hdulist[0].data[(camera - 1) * 4 + (ccd - 1), :]
     mask = np.repeat(mask.reshape(1, 2048), repeats=2048, axis=0)
-    bad_pixels = np.zeros(np.shape(flux[0]))
-    med_flux = np.median(flux, axis=0)
-    bad_pixels[med_flux > 0.8 * np.nanmax(med_flux)] = 1
-    bad_pixels[med_flux < 0.2 * np.nanmedian(med_flux)] = 1
-    bad_pixels[np.isnan(med_flux)] = 1
 
-    x_b, y_b = np.where(bad_pixels)
-    for i in range(len(x_b)):
-        if x_b[i] < 2047:
-            bad_pixels[x_b[i] + 1, y_b[i]] = 1
-        if x_b[i] > 0:
-            bad_pixels[x_b[i] - 1, y_b[i]] = 1
-        if y_b[i] < 2047:
-            bad_pixels[x_b[i], y_b[i] + 1] = 1
-        if y_b[i] > 0:
-            bad_pixels[x_b[i], y_b[i] - 1] = 1
+    bad_pixels = np.zeros(flux.shape[1:], dtype=bool)
+    median_flux = np.nanmedian(flux, axis=0)
+    bad_pixels[median_flux > 0.8 * np.nanmax(median_flux)] = 1
+    bad_pixels[median_flux < 0.2 * np.nanmedian(median_flux)] = 1
+    bad_pixels[np.isnan(median_flux)] = 1
 
-    mask = np.ma.masked_array(mask, mask=bad_pixels)
-    mask = np.ma.masked_equal(mask, 0)
+    # Mark neighbors of bad pixels as also bad
+    bad_y, bad_x = np.nonzero(bad_pixels)
+    for x, y in zip(bad_x, bad_y):
+        bad_pixels[min(y + 1, 2047), x] = 1
+        bad_pixels[max(y - 1, 0), x] = 1
+        bad_pixels[y, min(x + 1, 2047)] = 1
+        bad_pixels[y, max(x - 1, 0)] = 1
 
-    for i in range(10):
-        with fits.open(input_files[np.nonzero(np.array(quality) == 0)[0][i]]) as hdul:
-            wcs = WCS(hdul[0].header)
-        if wcs.axis_type_names == ['RA', 'DEC']:
-            exposure = int(hdul[0].header['EXPTIME'])
-            break
+    mask = np.ma.masked_array(mask, mask=bad_pixels | (mask == 0))
 
-    catalogs_directory = f"{local_directory}catalogs/"
-    gaia_catalog = QTable.read(f"{catalogs_directory}Gaia_camera{camera}.ecsv")
-    tic_catalog = QTable.read(f"{catalogs_directory}TIC_camera{camera}.ecsv")
+    # Get WCS object from good-quality FFI
+    first_good_quality_ffi = ffi_files[np.nonzero(quality == 0)[0][0]]
+    with warnings.catch_warnings():
+        # TICA FITS headers get wrangled by Astropy, but it creates no problems
+        warnings.simplefilter("ignore", AstropyWarning)
+        with fits.open(first_good_quality_ffi) as hdulist:
+            wcs = WCS(hdulist[0].header)
+            exposure = int(hdulist[0].header["EXPTIME"])
 
-    # 95*95 cuts with 2 pixel redundant, (22*22 cuts)
-    # try 77*77 with 4 redundant, (28*28 cuts)
-    os.makedirs(f'{local_directory}source/{camera}-{ccd}/', exist_ok=True)
-    for i in trange(14):  # 22
-        for j in range(14):  # 22
-            source_path = f'{local_directory}source/{camera}-{ccd}/source_{i:02d}_{j:02d}.pkl'
-            source_exists = exists(source_path)
-            if source_exists and os.path.getsize(source_path) > 0:
-                # print(f'{source_path} exists. ')
-                pass
-            else:
-                with open(source_path, 'wb') as output:
-                    source = Source(x=i * (size - 4), y=j * (size - 4), flux=flux, mask=mask, orbit=orbit,
-                                    sector=sector, time=time, size=size, quality=quality, wcs=wcs,
-                                    camera=camera, ccd=ccd, exposure=exposure, cadence=cadence,
-                                    gaia_catalog=gaia_catalog, tic_catalog=tic_catalog)
-                    pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)
+    catalogs_directory = base_directory / "catalogs"
+    logger.info(
+        f"Reading catalogs for camera {camera} CCD {ccd} from {catalogs_directory.resolve()}"
+    )
+    gaia_catalog = QTable.read(catalogs_directory / f"Gaia_camera{camera}.ecsv")
+    tic_catalog = QTable.read(catalogs_directory / f"TIC_camera{camera}.ecsv")
+
+    source_directory = base_directory / f"source/{camera}-{ccd}"
+    source_directory.mkdir(exist_ok=True)
+    write_source_pickle_from_x_y = partial(
+        _make_source_and_write_pickle,
+        output_directory=source_directory,
+        replace=replace,
+        flux=flux,
+        mask=mask,
+        orbit=orbit,
+        sector=sector,
+        time=time,
+        size=cutout_size,
+        quality=quality,
+        wcs=wcs,
+        camera=camera,
+        ccd=ccd,
+        exposure=exposure,
+        cadence=cadence,
+        gaia_catalog=gaia_catalog,
+        tic_catalog=tic_catalog,
+    )
+    # TODO remove this comment when the issue is resolved
+    # Currently we don't actually do multiprocessing here because the catalogs can't be pickled.
+    # There is a problem pickling astropy `MaskedQuantity` objects. There was some progress in
+    # v7.0.1, and there appears to be an issue tracking the remaining problem:
+    # https://github.com/astropy/astropy/issues/16352
+    source_writer_iterator = pool_map_if_multiprocessing_with_tqdm(
+        write_source_pickle_from_x_y,
+        product(range(14), repeat=2),
+        nprocs=1,  # TODO change to `nprocs=procs` when issue above is resolved
+        pool_map_method="imap_unordered",
+        desc=f"Writing source pickle files for {camera}-{ccd}",
+        unit="source",
+        total=14 * 14,
+    )
+    # Lazy iterator needs to be consumed
+    for _ in source_writer_iterator:
+        pass
