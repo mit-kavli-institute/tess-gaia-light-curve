@@ -16,10 +16,12 @@ from astropy.wcs import WCS
 from erfa.core import ErfaWarning
 import numpy as np
 from scipy import ndimage
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.util import data
 from tglc.util.constants import convert_gaia_mags_to_tmag
-from tglc.util.multiprocessing import pool_map_if_multiprocessing_with_tqdm
+from tglc.util.multiprocessing import pool_map_if_multiprocessing
 
 
 logger = logging.getLogger(__name__)
@@ -457,20 +459,23 @@ def ffi(
     quality = np.zeros_like(ffi_files, dtype=np.int32)
     flux = np.full((len(ffi_files), 2048, 2048), np.nan, dtype=np.float32)
     get_ffi_header_data_and_flux_for_camera = partial(_get_ffi_header_data_and_flux, camera=camera)
-    ffi_data_iterator = pool_map_if_multiprocessing_with_tqdm(
-        get_ffi_header_data_and_flux_for_camera,
-        ffi_files,
-        nprocs=nprocs,
-        pool_map_method="imap_unordered",
+    ffi_data_iterator = tqdm(
+        pool_map_if_multiprocessing(
+            get_ffi_header_data_and_flux_for_camera,
+            ffi_files,
+            nprocs=nprocs,
+            pool_map_method="imap_unordered",
+        ),
         desc=f"Reading FFI files for {camera}-{ccd}",
         unit="file",
         total=len(ffi_files),
     )
-    for i, (ffi_quality, ffi_cadence, ffi_time, ffi_flux) in enumerate(ffi_data_iterator):
-        quality[i] = ffi_quality
-        cadence[i] = ffi_cadence
-        time[i] = ffi_time
-        flux[i] = ffi_flux
+    with logging_redirect_tqdm():
+        for i, (ffi_quality, ffi_cadence, ffi_time, ffi_flux) in enumerate(ffi_data_iterator):
+            quality[i] = ffi_quality
+            cadence[i] = ffi_cadence
+            time[i] = ffi_time
+            flux[i] = ffi_flux
     time_order = np.argsort(time)
     time = time[time_order]
     cadence = cadence[time_order]
@@ -550,15 +555,18 @@ def ffi(
     # There is a problem pickling astropy `MaskedQuantity` objects. There was some progress in
     # v7.0.1, and there appears to be an issue tracking the remaining problem:
     # https://github.com/astropy/astropy/issues/16352
-    source_writer_iterator = pool_map_if_multiprocessing_with_tqdm(
-        write_source_pickle_from_x_y,
-        product(range(14), repeat=2),
-        nprocs=1,  # TODO change to `nprocs=procs` when issue above is resolved
-        pool_map_method="imap_unordered",
+    source_writer_iterator = tqdm(
+        pool_map_if_multiprocessing(
+            write_source_pickle_from_x_y,
+            product(range(14), repeat=2),
+            nprocs=1,  # TODO change to `nprocs=procs` when issue above is resolved
+            pool_map_method="imap_unordered",
+        ),
         desc=f"Writing source pickle files for {camera}-{ccd}",
         unit="source",
         total=14 * 14,
     )
     # Lazy iterator needs to be consumed
-    for _ in source_writer_iterator:
-        pass
+    with logging_redirect_tqdm():
+        for _ in source_writer_iterator:
+            pass
