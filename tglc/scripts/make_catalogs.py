@@ -219,7 +219,9 @@ def _make_tic_and_gaia_catalogs(
         # header and then write the data to get an equivalent file.
         tic_results[:0].write(tic_catalog_file, overwrite=replace)
         with open(tic_catalog_file, "a") as tic_output:
-            tic_results.write(tic_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False)
+            tic_results.write(
+                tic_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False
+            )
     else:
         logger.info(f"TIC catalog at {tic_catalog_file} already exists and will not be overwritten")
 
@@ -230,7 +232,9 @@ def _make_tic_and_gaia_catalogs(
         # header and then write the data to get an equivalent file.
         gaia_results[:0].write(gaia_catalog_file, overwrite=replace)
         with open(gaia_catalog_file, "a") as gaia_output:
-            gaia_results.write(gaia_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False)
+            gaia_results.write(
+                gaia_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False
+            )
     else:
         logger.info(
             f"Gaia catalog at {gaia_catalog_file} already exists and will not be overwritten"
