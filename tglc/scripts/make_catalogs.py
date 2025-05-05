@@ -11,7 +11,7 @@ from logging import getLogger
 from pathlib import Path
 
 from astropy.coordinates import SkyCoord
-from astropy.table import QTable
+from astropy.table import Table
 import astropy.units as u
 import numpy as np
 import pandas as pd
@@ -97,7 +97,7 @@ def get_tic_catalog_data(
     magnitude_cutoff: float = 13.5,
     mdwarf_magnitude_cutoff: float | None = None,
     nprocs: int = 1,
-) -> QTable:
+) -> Table:
     """
     Query the TESS Input Catalog for stars in a grid of cones covering the camera during the sector.
 
@@ -115,7 +115,7 @@ def get_tic_catalog_data(
 
     Returns
     -------
-    tic_data : QTable
+    tic_data : Table
         Table containing the TIC catalog fields with appropriate units
     """
     query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
@@ -129,7 +129,7 @@ def get_tic_catalog_data(
             run_tic_cone_query_with_mag_cutoffs,
             zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg),
         )
-    tic_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("id"))
+    tic_data = Table.from_pandas(pd.concat(query_results).drop_duplicates("id"))
     tic_data["ra"].unit = u.deg
     tic_data["dec"].unit = u.deg
     tic_data["pmra"].unit = u.mas / u.yr
@@ -164,7 +164,7 @@ def _run_gaia_cone_query(radec: tuple[float, float], radius: float = 5.0) -> pd.
     return gaia.to_df(gaia_cone_query)
 
 
-def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -> QTable:
+def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -> Table:
     """
     Query Gaia for stars in a grid of cones covering the camera during the sector.
 
@@ -177,7 +177,7 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
 
     Returns
     -------
-    gaia_data : QTable
+    gaia_data : Table
         Table containing the Gaia catalog fields with appropriate units
     """
     query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
@@ -186,7 +186,7 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
             _run_gaia_cone_query,
             zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg),
         )
-    gaia_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
+    gaia_data = Table.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
     gaia_data["ra"].unit = u.deg
     gaia_data["dec"].unit = u.deg
     gaia_data["pmra"].unit = u.mas / u.yr
@@ -215,14 +215,22 @@ def _make_tic_and_gaia_catalogs(
         tic_results = get_tic_catalog_data(
             sector, camera, ccd, magnitude_cutoff=tic_magnitude_limit, nprocs=nprocs
         )
-        tic_results.write(tic_catalog_file, overwrite=replace)
+        # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
+        # header and then write the data to get an equivalent file.
+        tic_results[:0].write(tic_catalog_file, overwrite=replace)
+        with open(tic_catalog_file, "a") as tic_output:
+            tic_results.write(tic_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False)
     else:
         logger.info(f"TIC catalog at {tic_catalog_file} already exists and will not be overwritten")
 
     gaia_catalog_file: Path = output_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv"
     if replace or not gaia_catalog_file.is_file():
         gaia_results = get_gaia_catalog_data(sector, camera, ccd, nprocs=nprocs)
-        gaia_results.write(gaia_catalog_file, overwrite=replace)
+        # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
+        # header and then write the data to get an equivalent file.
+        gaia_results[:0].write(gaia_catalog_file, overwrite=replace)
+        with open(gaia_catalog_file, "a") as gaia_output:
+            gaia_results.write(gaia_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False)
     else:
         logger.info(
             f"Gaia catalog at {gaia_catalog_file} already exists and will not be overwritten"
@@ -259,7 +267,10 @@ def make_catalog_main():
     )
     make_catalogs_iterator = tqdm(
         pool_map_if_multiprocessing(
-            make_tic_and_gaia_catalogs_for_camera_and_ccd, product(range(1, 5), repeat=2)
+            make_tic_and_gaia_catalogs_for_camera_and_ccd,
+            product(range(1, 5), repeat=2),
+            nprocs=min(args.nprocs, 16),
+            pool_map_method="imap_unordered",
         ),
         desc="Creating catalogs for cameras 1-4, CCDs 1-4",
         unit="ccd",
