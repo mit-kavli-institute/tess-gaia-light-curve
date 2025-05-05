@@ -10,6 +10,10 @@ import numpy as np
 import numpy.typing as npt
 
 
+TESS_CCD_SHAPE = (2078, 2136)
+"""The shape of an array of data from a CCD on TESS: 2078 rows, 2136 columns."""
+
+
 TESS_PIXEL_SCALE = u.pixel_scale(0.35 * u.arcmin / u.pixel)
 """
 Astropy units equivalency for TESS pixels taken from Ricker et al, 2014, S4.1, table 1.

@@ -4,22 +4,25 @@ current sector.
 """
 
 import argparse
+from itertools import product
 from logging import getLogger
 from pathlib import Path
 
+from astropy.coordinates import SkyCoord
 from astropy.table import QTable
 import astropy.units as u
 import numpy as np
 import pandas as pd
 import sqlalchemy as sa
+import tesswcs
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.databases import TIC, Gaia
 from tglc.util.cli import base_parser
+from tglc.util.constants import TESS_CCD_SHAPE
 from tglc.util.logging import setup_logging
 from tglc.util.multiprocessing import pool_map_if_multiprocessing
-from tglc.util.tess_pointings import get_sector_camera_pointing
 
 
 logger = getLogger(__name__)
@@ -38,11 +41,16 @@ GAIA_CATALOG_FIELDS = [
 ]
 
 
-def _get_camera_query_grid_coordinates(ra: float, dec: float) -> np.ndarray:
-    """Get centers of 5deg-radius cones that will cover a 24x24 deg field centered at (ra, dec)."""
-    grid_points = np.arange(-9, 12, 3)
-    ra_grid, dec_grid = np.meshgrid(ra + grid_points, dec + grid_points)
-    return np.array([ra + ra_grid, dec + dec_grid]).T.reshape(-1, 2)
+def _get_camera_query_grid_centers(sector: int, camera: int, ccd: int) -> SkyCoord:
+    """Get centers of 5deg-radius cones that will cover a CCD FOV in a given sector."""
+    ra, dec, roll = tesswcs.pointings[tesswcs.pointings["Sector"] == sector]["RA", "Dec", "Roll"]
+    wcs = tesswcs.WCS.predict(ra, dec, roll, camera, ccd, warp=False)
+    ccd_rows, ccd_columns = TESS_CCD_SHAPE
+    query_center_ccd_x, query_center_ccd_y = np.meshgrid(
+        np.arange(ccd_columns / 4, ccd_columns, ccd_columns / 4, dtype=float),
+        np.arange(ccd_rows / 4, ccd_rows, ccd_rows / 4, dtype=float),
+    )
+    return wcs.pixel_to_world(query_center_ccd_x.ravel(), query_center_ccd_y.ravel())
 
 
 def _run_tic_cone_query(
@@ -83,6 +91,7 @@ def _run_tic_cone_query(
 def get_tic_catalog_data(
     sector: int,
     camera: int,
+    ccd: int,
     magnitude_cutoff: float = 13.5,
     mdwarf_magnitude_cutoff: float | None = None,
     nprocs: int = 1,
@@ -92,10 +101,8 @@ def get_tic_catalog_data(
 
     Parameters
     ----------
-    sector : int
-        The sector to use for pointing data
-    camera : int
-        The camera we want stars for
+    sector, camera, ccd : int
+        TESS sector, camera, and CCD identifying the field of view to create a catalog for.
     magnitude_cutoff : float
         Stars brighter than the magnitude cutoff will be included in the query. Default = 13.5
     mdwarf_magnitude_cutoff : float
@@ -109,13 +116,13 @@ def get_tic_catalog_data(
     tic_data : QTable
         Table containing the TIC catalog fields with appropriate units
     """
-    camera_pointing = get_sector_camera_pointing(sector, camera)
-    # Pyticdb can't handle np.float types, which is what camera_pointing.xx.deg are by default
-    ra = float(camera_pointing.ra.deg)
-    dec = float(camera_pointing.dec.deg)
+    query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
     query_results = list(
         pool_map_if_multiprocessing(
-            _run_tic_cone_query, _get_camera_query_grid_coordinates(ra, dec), nprocs=nprocs
+            _run_tic_cone_query,
+            [(ra, dec) for ra, dec in zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg)],
+            npros=nprocs,
+            pool_map_method="imap_unordered",
         )
     )
     tic_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("id"))
@@ -153,16 +160,14 @@ def _run_gaia_cone_query(radec: tuple[float, float], radius: float = 5.0) -> pd.
     return gaia.to_df(gaia_cone_query)
 
 
-def get_gaia_catalog_data(sector: int, camera: int, nprocs: int = 1) -> QTable:
+def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -> QTable:
     """
     Query Gaia for stars in a grid of cones covering the camera during the sector.
 
     Parameters
     ----------
-    sector : int
-        The sector to use for pointing data
-    camera : int
-        The camera we want stars for
+    sector, camera, ccd : int
+        TESS sector, camera, and CCD identifying the field of view to create a catalog for.
     nprocss : int
         Number of processes to use to distribute queries
 
@@ -171,13 +176,11 @@ def get_gaia_catalog_data(sector: int, camera: int, nprocs: int = 1) -> QTable:
     gaia_data : QTable
         Table containing the Gaia catalog fields with appropriate units
     """
-    camera_pointing = get_sector_camera_pointing(sector, camera)
-    # Pyticdb can't handle np.float types, which is what camera_pointing.xx.deg are by default
-    ra = float(camera_pointing.ra.deg)
-    dec = float(camera_pointing.dec.deg)
+    query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
     query_results = list(
         pool_map_if_multiprocessing(
-            _run_gaia_cone_query, _get_camera_query_grid_coordinates(ra, dec), nprocs=nprocs
+            _run_gaia_cone_query,
+            [(ra, dec) for ra, dec in zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg)],
         )
     )
     gaia_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
@@ -210,19 +213,24 @@ def make_catalog_main():
     setup_logging(args.debug, args.logfile)
 
     with logging_redirect_tqdm():
-        for camera in tqdm(range(1, 5), desc="Creating catalogs for cameras 1-4", unit="camera"):
-            tic_catalog_file: Path = args.output_dir / f"TIC_camera{camera}.ecsv"
+        for camera, ccd in tqdm(
+            product(range(1, 5), repeat=2),
+            desc="Creating catalogs for cameras 1-4, CCDs 1-4",
+            unit="ccd",
+            total=16,
+        ):
+            tic_catalog_file: Path = args.output_dir / f"TIC_camera{camera}_ccd{ccd}.ecsv"
             if args.replace or not tic_catalog_file.is_file():
-                tic_results = get_tic_catalog_data(args.sector, camera, nprocs=args.nprocs)
+                tic_results = get_tic_catalog_data(args.sector, camera, ccd, nprocs=args.nprocs)
                 tic_results.write(tic_catalog_file, overwrite=args.replace)
             else:
                 logger.info(
                     f"TIC catalog at {tic_catalog_file} already exists and will not be overwritten"
                 )
 
-            gaia_catalog_file: Path = args.output_dir / f"Gaia_camera{camera}.ecsv"
+            gaia_catalog_file: Path = args.output_dir / f"Gaia_camera{camera}_ccd{ccd}.ecsv"
             if args.replace or not gaia_catalog_file.is_file():
-                gaia_results = get_gaia_catalog_data(args.sector, camera, nprocs=args.nprocs)
+                gaia_results = get_gaia_catalog_data(args.sector, camera, ccd, nprocs=args.nprocs)
                 gaia_results.write(gaia_catalog_file, overwrite=args.replace)
             else:
                 logger.info(
