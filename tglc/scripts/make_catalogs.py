@@ -4,6 +4,8 @@ current sector.
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from itertools import product
 from logging import getLogger
 from pathlib import Path
@@ -117,14 +119,16 @@ def get_tic_catalog_data(
         Table containing the TIC catalog fields with appropriate units
     """
     query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
-    query_results = list(
-        pool_map_if_multiprocessing(
-            _run_tic_cone_query,
-            [(ra, dec) for ra, dec in zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg)],
-            nprocs=nprocs,
-            pool_map_method="imap_unordered",
-        )
+    run_tic_cone_query_with_mag_cutoffs = partial(
+        _run_tic_cone_query,
+        magnitude_cutoff=magnitude_cutoff,
+        mdwarf_magnitude_cutoff=mdwarf_magnitude_cutoff,
     )
+    with ThreadPoolExecutor(max_workers=nprocs) as executor:
+        query_results = executor.map(
+            run_tic_cone_query_with_mag_cutoffs,
+            zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg),
+        )
     tic_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("id"))
     tic_data["ra"].unit = u.deg
     tic_data["dec"].unit = u.deg
@@ -177,14 +181,11 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
         Table containing the Gaia catalog fields with appropriate units
     """
     query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
-    query_results = list(
-        pool_map_if_multiprocessing(
+    with ThreadPoolExecutor(max_workers=nprocs) as executor:
+        query_results = executor.map(
             _run_gaia_cone_query,
-            [(ra, dec) for ra, dec in zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg)],
-            nprocs=nprocs,
-            pool_map_method="imap_unordered",
+            zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg),
         )
-    )
     gaia_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
     gaia_data["ra"].unit = u.deg
     gaia_data["dec"].unit = u.deg
@@ -192,6 +193,40 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
     gaia_data["pmdec"].unit = u.mas / u.yr
     logger.debug(f"Found {len(gaia_data)} Gaia stars for camera {camera}, CCD {ccd}")
     return gaia_data
+
+
+def _make_tic_and_gaia_catalogs(
+    camera_ccd: tuple[int, int],
+    sector: int,
+    tic_magnitude_limit: float,
+    output_directory: Path,
+    nprocs: int = 1,
+    replace: bool = False,
+):
+    """
+    Make TIC and Gaia catalog files for a camera/CCD in a sector.
+
+    Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
+    unpacks `camera` and `ccd` from the first argument.
+    """
+    camera, ccd = camera_ccd
+    tic_catalog_file: Path = output_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv"
+    if replace or not tic_catalog_file.is_file():
+        tic_results = get_tic_catalog_data(
+            sector, camera, ccd, magnitude_cutoff=tic_magnitude_limit, nprocs=nprocs
+        )
+        tic_results.write(tic_catalog_file, overwrite=replace)
+    else:
+        logger.info(f"TIC catalog at {tic_catalog_file} already exists and will not be overwritten")
+
+    gaia_catalog_file: Path = output_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv"
+    if replace or not gaia_catalog_file.is_file():
+        gaia_results = get_gaia_catalog_data(sector, camera, ccd, nprocs=nprocs)
+        gaia_results.write(gaia_catalog_file, overwrite=replace)
+    else:
+        logger.info(
+            f"Gaia catalog at {gaia_catalog_file} already exists and will not be overwritten"
+        )
 
 
 def make_catalog_main():
@@ -214,30 +249,26 @@ def make_catalog_main():
 
     setup_logging(args.debug, args.logfile)
 
+    make_tic_and_gaia_catalogs_for_camera_and_ccd = partial(
+        _make_tic_and_gaia_catalogs,
+        sector=args.sector,
+        tic_magnitude_limit=args.maglim,
+        output_directory=args.output_dir,
+        nprocs=max(args.nprocs // 16, 1),  # Controls how many threads to use for queries
+        replace=args.replace,
+    )
+    make_catalogs_iterator = tqdm(
+        pool_map_if_multiprocessing(
+            make_tic_and_gaia_catalogs_for_camera_and_ccd, product(range(1, 5), repeat=2)
+        ),
+        desc="Creating catalogs for cameras 1-4, CCDs 1-4",
+        unit="ccd",
+        total=16,
+    )
     with logging_redirect_tqdm():
-        for camera, ccd in tqdm(
-            product(range(1, 5), repeat=2),
-            desc="Creating catalogs for cameras 1-4, CCDs 1-4",
-            unit="ccd",
-            total=16,
-        ):
-            tic_catalog_file: Path = args.output_dir / f"TIC_camera{camera}_ccd{ccd}.ecsv"
-            if args.replace or not tic_catalog_file.is_file():
-                tic_results = get_tic_catalog_data(args.sector, camera, ccd, nprocs=args.nprocs)
-                tic_results.write(tic_catalog_file, overwrite=args.replace)
-            else:
-                logger.info(
-                    f"TIC catalog at {tic_catalog_file} already exists and will not be overwritten"
-                )
-
-            gaia_catalog_file: Path = args.output_dir / f"Gaia_camera{camera}_ccd{ccd}.ecsv"
-            if args.replace or not gaia_catalog_file.is_file():
-                gaia_results = get_gaia_catalog_data(args.sector, camera, ccd, nprocs=args.nprocs)
-                gaia_results.write(gaia_catalog_file, overwrite=args.replace)
-            else:
-                logger.info(
-                    f"Gaia catalog at {gaia_catalog_file} already exists and will not be overwritten"
-                )
+        # Consume catalog iterator to execute _make_tic_and_gaia_catalogs
+        for _ in make_catalogs_iterator:
+            pass
 
 
 if __name__ == "__main__":
