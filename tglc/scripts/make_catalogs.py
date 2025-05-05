@@ -43,7 +43,7 @@ GAIA_CATALOG_FIELDS = [
 
 def _get_camera_query_grid_centers(sector: int, camera: int, ccd: int) -> SkyCoord:
     """Get centers of 5deg-radius cones that will cover a CCD FOV in a given sector."""
-    ra, dec, roll = tesswcs.pointings[tesswcs.pointings["Sector"] == sector]["RA", "Dec", "Roll"]
+    ra, dec, roll = tesswcs.pointings[tesswcs.pointings["Sector"] == sector][0]["RA", "Dec", "Roll"]
     wcs = tesswcs.WCS.predict(ra, dec, roll, camera, ccd, warp=False)
     ccd_rows, ccd_columns = TESS_CCD_SHAPE
     query_center_ccd_x, query_center_ccd_y = np.meshgrid(
@@ -121,7 +121,7 @@ def get_tic_catalog_data(
         pool_map_if_multiprocessing(
             _run_tic_cone_query,
             [(ra, dec) for ra, dec in zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg)],
-            npros=nprocs,
+            nprocs=nprocs,
             pool_map_method="imap_unordered",
         )
     )
@@ -131,7 +131,7 @@ def get_tic_catalog_data(
     tic_data["pmra"].unit = u.mas / u.yr
     tic_data["pmdec"].unit = u.mas / u.yr
     logger.debug(
-        f"Found {len(tic_data)} TIC stars for camera {camera} after applying magnitude "
+        f"Found {len(tic_data)} TIC stars for camera {camera}, CCD {ccd} after applying magnitude "
         f"(<{magnitude_cutoff} Tmag) and M dwarf (<{mdwarf_magnitude_cutoff} Tmag, <4,000K T_eff, "
         "<0.8 solar rad) filters"
     )
@@ -181,6 +181,8 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
         pool_map_if_multiprocessing(
             _run_gaia_cone_query,
             [(ra, dec) for ra, dec in zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg)],
+            nprocs=nprocs,
+            pool_map_method="imap_unordered",
         )
     )
     gaia_data = QTable.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
@@ -188,7 +190,7 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
     gaia_data["dec"].unit = u.deg
     gaia_data["pmra"].unit = u.mas / u.yr
     gaia_data["pmdec"].unit = u.mas / u.yr
-    logger.debug(f"Found {len(gaia_data)} Gaia stars for camera {camera}")
+    logger.debug(f"Found {len(gaia_data)} Gaia stars for camera {camera}, CCD {ccd}")
     return gaia_data
 
 
