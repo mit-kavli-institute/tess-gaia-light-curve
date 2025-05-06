@@ -526,8 +526,8 @@ def ffi(
     logger.info(
         f"Reading catalogs for camera {camera} CCD {ccd} from {catalogs_directory.resolve()}"
     )
-    gaia_catalog = QTable.read(catalogs_directory / f"Gaia_camera{camera}.ecsv")
-    tic_catalog = QTable.read(catalogs_directory / f"TIC_camera{camera}.ecsv")
+    gaia_catalog = QTable.read(catalogs_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv")
+    tic_catalog = QTable.read(catalogs_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv")
 
     source_directory = base_directory / f"source/{camera}-{ccd}"
     source_directory.mkdir(exist_ok=True)
