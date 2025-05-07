@@ -2,7 +2,6 @@ from functools import partial
 from importlib import resources
 from itertools import product
 import logging
-from multiprocessing import get_context
 from pathlib import Path
 import pickle
 import warnings
@@ -17,7 +16,7 @@ from astropy.wcs import WCS
 import bottleneck as bn
 from erfa.core import ErfaWarning
 import numba
-from numba import jit, float32, prange
+from numba import float32, jit, prange
 import numpy as np
 from scipy import ndimage
 from tqdm import tqdm
@@ -418,7 +417,7 @@ def _make_source_and_write_pickle(
 def _fast_nanmedian_axis0(array):
     """
     Fast JIT-compiled, multithreaded version of np.nanmedian(array, axis=0)
-    
+
     Computing a nanmedian image from all the FFI data is necessary to detect bad pixels, but on
     arrays with roughly the shape (6000, 2048, 2048), this is incredibly. We use numba here to
     distribute the work to many cores.
@@ -507,7 +506,7 @@ def ffi(
         logger.warning(f"{(np.diff(cadence) != 1).sum()} cadence gaps != 1 detected.")
 
     # Load or save mask
-    numba.set_num_threads(nrpocs)
+    numba.set_num_threads(nprocs)
     if produce_mask:
         logger.info("Saving background mask")
         median_flux = _fast_nanmedian_axis0(flux)
