@@ -2,6 +2,7 @@ from functools import partial
 from importlib import resources
 from itertools import product
 import logging
+from multiprocessing import get_context
 from pathlib import Path
 import pickle
 import warnings
@@ -13,7 +14,10 @@ from astropy.time import Time
 import astropy.units as u
 from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS
+import bottleneck as bn
 from erfa.core import ErfaWarning
+import numba
+from numba import jit, float32, prange
 import numpy as np
 from scipy import ndimage
 from tqdm import tqdm
@@ -82,10 +86,10 @@ def crossmatch_tic_to_gaia(
         frame="icrs",
         obstime=Time("J2000"),
     )
-    pm_adjusted_tic_coords = tic_coords.apply_space_motion(Time("J2016"))
-    gaia_coords = SkyCoord(gaia["ra"], gaia["dec"])
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", ErfaWarning)
+        pm_adjusted_tic_coords = tic_coords.apply_space_motion(Time("J2016"))
+        gaia_coords = SkyCoord(gaia["ra"], gaia["dec"])
         match_idx, match_dist_angle, _match_dist_3d = pm_adjusted_tic_coords.match_to_catalog_sky(
             gaia_coords
         )
@@ -296,10 +300,10 @@ class Source:
                         - 0.633923 * dif
                         + 0.0324473
                     )
-                if np.isnan(tess_mag[i]):
-                    tess_mag[i] = catalogdata["phot_g_mean_mag"][i] - 0.430
-                if np.isnan(tess_mag[i]):
-                    in_frame[i] = False
+                    if np.isnan(tess_mag[i]):
+                        tess_mag[i] = catalogdata["phot_g_mean_mag"][i] - 0.430
+                    if np.isnan(tess_mag[i]):
+                        in_frame[i] = False
             else:
                 in_frame[i] = False
 
@@ -410,6 +414,22 @@ def _make_source_and_write_pickle(
         pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)
 
 
+@jit(float32[:, :](float32[:, :, :]), nogil=True, parallel=True)
+def _fast_nanmedian_axis0(array):
+    """
+    Fast JIT-compiled, multithreaded version of np.nanmedian(array, axis=0)
+    
+    Computing a nanmedian image from all the FFI data is necessary to detect bad pixels, but on
+    arrays with roughly the shape (6000, 2048, 2048), this is incredibly. We use numba here to
+    distribute the work to many cores.
+    """
+    result = np.empty(array.shape[1:], dtype=np.float32)
+    for i in prange(result.shape[0]):
+        for j in prange(result.shape[1]):
+            result[i, j] = np.nanmedian(array[:, i, j])
+    return result
+
+
 def ffi(
     camera: int,
     ccd: int,
@@ -476,6 +496,7 @@ def ffi(
             cadence[i] = ffi_cadence
             time[i] = ffi_time
             flux[i] = ffi_flux
+    logger.info("Sorting FFI data by timestamp")
     time_order = np.argsort(time)
     time = time[time_order]
     cadence = cadence[time_order]
@@ -486,21 +507,25 @@ def ffi(
         logger.warning(f"{(np.diff(cadence) != 1).sum()} cadence gaps != 1 detected.")
 
     # Load or save mask
+    numba.set_num_threads(nrpocs)
     if produce_mask:
-        median_flux = np.nanmedian(flux, axis=0)
+        logger.info("Saving background mask")
+        median_flux = _fast_nanmedian_axis0(flux)
         mask = background_mask(im=median_flux)
         mask /= ndimage.median_filter(mask, size=51)
         np.save(base_directory / f"mask/mask_sector{sector:04d}_cam{camera}_ccd{ccd}.npy", mask)
         return
+    logger.info("Loading background mask")
     mask_file = resources.files(data) / "median_mask.fits"
     with fits.open(mask_file) as hdulist:
         mask = hdulist[0].data[(camera - 1) * 4 + (ccd - 1), :]
     mask = np.repeat(mask.reshape(1, 2048), repeats=2048, axis=0)
 
+    logger.info("Detecting bad pixels")
     bad_pixels = np.zeros(flux.shape[1:], dtype=bool)
-    median_flux = np.nanmedian(flux, axis=0)
-    bad_pixels[median_flux > 0.8 * np.nanmax(median_flux)] = 1
-    bad_pixels[median_flux < 0.2 * np.nanmedian(median_flux)] = 1
+    median_flux = _fast_nanmedian_axis0(flux)
+    bad_pixels[median_flux > 0.8 * bn.nanmax(median_flux)] = 1
+    bad_pixels[median_flux < 0.2 * bn.nanmedian(median_flux)] = 1
     bad_pixels[np.isnan(median_flux)] = 1
 
     # Mark neighbors of bad pixels as also bad
@@ -513,6 +538,7 @@ def ffi(
 
     mask = np.ma.masked_array(mask, mask=bad_pixels | (mask == 0))
 
+    logger.info("Loading WCS pixel-to-world solution")
     # Get WCS object from good-quality FFI
     first_good_quality_ffi = ffi_files[np.nonzero(quality == 0)[0][0]]
     with warnings.catch_warnings():

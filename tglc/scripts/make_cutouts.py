@@ -5,7 +5,6 @@ Assumes `make_catalogs.py` has already been run.
 """
 
 import argparse
-from multiprocessing import set_start_method
 from pathlib import Path
 
 from tglc.ffi import ffi
@@ -31,7 +30,6 @@ def make_cutouts_main():
     orbit_directory: Path = args.tglc_data_dir / f"orbit{args.orbit:04d}"
     (orbit_directory / "source").mkdir(exist_ok=True)
 
-    set_start_method("fork")
     for camera in range(1, 5):
         for ccd in range(1, 5):
             ffi(
