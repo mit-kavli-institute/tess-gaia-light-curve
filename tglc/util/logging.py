@@ -31,4 +31,9 @@ def setup_logging(debug: bool = False, logfile: Path | None = None):
     base_tglc_logger.setLevel(log_level)
     base_tglc_logger.addHandler(handler)
 
+    # numba's logger spews a ton of stuff in debug mode
+    if debug:
+        numba_logger = logging.getLogger("numba")
+        numba_logger.setLevel(logging.INFO)
+
     logging.captureWarnings(True)

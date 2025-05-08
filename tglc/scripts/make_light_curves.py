@@ -17,8 +17,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from tglc.target_lightcurve import epsf
-from tglc.util.cli import base_parser, limit_math_multithreading
-from tglc.util.logging import setup_logging
 
 
 def plot_epsf(sector=1, camccd="", local_directory=""):
@@ -74,15 +72,7 @@ def make_light_curves_for_cutout(camera: int, ccd: int, x: int, y: int, local_di
     )
 
 
-def make_light_curves_main():
-    parser = argparse.ArgumentParser(
-        description="Create light curves from FFI cutouts", parents=[base_parser]
-    )
-    parser.add_argument("-o", "--orbit", type=int, required=True, help="Orbit of light curves")
-    args = parser.parse_args()
-
-    limit_math_multithreading(1)
-    setup_logging(args.debug, args.logfile)
+def make_light_curves_main(args: argparse.Namespace):
     orbit_directory: Path = args.tglc_data_dir / f"orbit{args.orbit:04d}"
     (orbit_directory / "epsf").mkdir(exist_ok=True)
     (orbit_directory / "lc").mkdir(exist_ok=True)

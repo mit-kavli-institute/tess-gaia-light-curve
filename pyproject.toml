@@ -30,6 +30,7 @@ dependencies = [
   "wotan",
   "seaborn",
 ]
+scripts = { tglc = "tglc.__main__:tglc_main" }
 
 [build-system]
 requires = ["setuptools"]

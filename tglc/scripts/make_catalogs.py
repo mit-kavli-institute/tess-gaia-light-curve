@@ -1,6 +1,6 @@
 """
 Script that creates cached versions of the TIC and Gaia databases with the entries relevant for the
-current sector.
+current orbit.
 """
 
 import argparse
@@ -21,9 +21,7 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.databases import TIC, Gaia
-from tglc.util.cli import base_parser
-from tglc.util.constants import TESS_CCD_SHAPE
-from tglc.util.logging import setup_logging
+from tglc.util.constants import TESS_CCD_SHAPE, get_sector_containing_orbit
 from tglc.util.multiprocessing import pool_map_if_multiprocessing
 
 
@@ -91,7 +89,7 @@ def _run_tic_cone_query(
 
 
 def get_tic_catalog_data(
-    sector: int,
+    orbit: int,
     camera: int,
     ccd: int,
     magnitude_cutoff: float = 13.5,
@@ -103,8 +101,8 @@ def get_tic_catalog_data(
 
     Parameters
     ----------
-    sector, camera, ccd : int
-        TESS sector, camera, and CCD identifying the field of view to create a catalog for.
+    orbit, camera, ccd : int
+        TESS orbit, camera, and CCD identifying the field of view to create a catalog for.
     magnitude_cutoff : float
         Stars brighter than the magnitude cutoff will be included in the query. Default = 13.5
     mdwarf_magnitude_cutoff : float
@@ -118,6 +116,7 @@ def get_tic_catalog_data(
     tic_data : Table
         Table containing the TIC catalog fields with appropriate units
     """
+    sector = get_sector_containing_orbit(orbit)
     query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
     run_tic_cone_query_with_mag_cutoffs = partial(
         _run_tic_cone_query,
@@ -164,14 +163,14 @@ def _run_gaia_cone_query(radec: tuple[float, float], radius: float = 5.0) -> pd.
     return gaia.to_df(gaia_cone_query)
 
 
-def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -> Table:
+def get_gaia_catalog_data(orbit: int, camera: int, ccd: int, nprocs: int = 1) -> Table:
     """
     Query Gaia for stars in a grid of cones covering the camera during the sector.
 
     Parameters
     ----------
-    sector, camera, ccd : int
-        TESS sector, camera, and CCD identifying the field of view to create a catalog for.
+    orbit, camera, ccd : int
+        TESS orbit, camera, and CCD identifying the field of view to create a catalog for.
     nprocss : int
         Number of processes to use to distribute queries
 
@@ -180,6 +179,7 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
     gaia_data : Table
         Table containing the Gaia catalog fields with appropriate units
     """
+    sector = get_sector_containing_orbit(orbit)
     query_grid_centers = _get_camera_query_grid_centers(sector, camera, ccd)
     with ThreadPoolExecutor(max_workers=nprocs) as executor:
         query_results = executor.map(
@@ -197,7 +197,7 @@ def get_gaia_catalog_data(sector: int, camera: int, ccd: int, nprocs: int = 1) -
 
 def _make_tic_and_gaia_catalogs(
     camera_ccd: tuple[int, int],
-    sector: int,
+    orbit: int,
     tic_magnitude_limit: float,
     output_directory: Path,
     nprocs: int = 1,
@@ -213,7 +213,7 @@ def _make_tic_and_gaia_catalogs(
     tic_catalog_file: Path = output_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv"
     if replace or not tic_catalog_file.is_file():
         tic_results = get_tic_catalog_data(
-            sector, camera, ccd, magnitude_cutoff=tic_magnitude_limit, nprocs=nprocs
+            orbit, camera, ccd, magnitude_cutoff=tic_magnitude_limit, nprocs=nprocs
         )
         # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
         # header and then write the data to get an equivalent file.
@@ -227,7 +227,7 @@ def _make_tic_and_gaia_catalogs(
 
     gaia_catalog_file: Path = output_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv"
     if replace or not gaia_catalog_file.is_file():
-        gaia_results = get_gaia_catalog_data(sector, camera, ccd, nprocs=nprocs)
+        gaia_results = get_gaia_catalog_data(orbit, camera, ccd, nprocs=nprocs)
         # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
         # header and then write the data to get an equivalent file.
         gaia_results[:0].write(gaia_catalog_file, overwrite=replace)
@@ -241,29 +241,12 @@ def _make_tic_and_gaia_catalogs(
         )
 
 
-def make_catalog_main():
-    parser = argparse.ArgumentParser(
-        description="Create cached versions of the TIC and Gaia databses with relevant entries for a given sector.",
-        parents=[base_parser],
-    )
-    parser.add_argument("-s", "--sector", type=int, required=True, help="Sector to query for.")
-    parser.add_argument(
-        "-o",
-        "--output-dir",
-        type=Path,
-        help="Output directory for cached catalog files.",
-    )
-    parser.add_argument("--maglim", type=float, default=13.5, help="Magnitude limit for TIC query")
-    args = parser.parse_args()
-    if args.output_dir is None:
-        args.output_dir = args.tglc_data_dir / f"sector{args.sector:04d}" / "catalogs"
+def make_catalog_main(args: argparse.Namespace):
     args.output_dir.mkdir(exist_ok=True)
-
-    setup_logging(args.debug, args.logfile)
 
     make_tic_and_gaia_catalogs_for_camera_and_ccd = partial(
         _make_tic_and_gaia_catalogs,
-        sector=args.sector,
+        orbit=args.orbit,
         tic_magnitude_limit=args.maglim,
         output_directory=args.output_dir,
         nprocs=max(args.nprocs // 16, 1),  # Controls how many threads to use for queries
