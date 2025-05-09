@@ -37,29 +37,33 @@ def make_tglc_design_matrix(
     epsf_contributions_to_pixels = np.zeros(
         (image_shape[0], image_shape[1], oversampled_psf_shape[0], oversampled_psf_shape[1])
     )
+    pixels_in_psf_x = np.arange(psf_shape_pixels[1]) - (psf_shape_pixels[1] - 1) / 2
+    pixels_in_epsf_y = np.arange(psf_shape_pixels[0]) - (psf_shape_pixels[0] - 1) / 2
     for x, y in star_positions:
-        # TODO this only does the pixel actually containing the star! Need to include all the others
         nearest_pixel_x, nearest_pixel_y = (round(x), round(y))
-        # Get the coordinate of the nearest pixel center in coordinates of the PSF grid, with the
-        # bottom left PSF point at (0, 0) and distance 1 between adjacent PSF points.
-        nearest_pixel_psf_x, nearest_pixel_psf_y = (
-            (nearest_pixel_x - x) / oversample_factor + oversampled_psf_shape[1] // 2,
-            (nearest_pixel_y - y) / oversample_factor + oversampled_psf_shape[0] // 2,
-        )
-        # The four closest PSF points are interpolated to give the PSF model value of the pixel,
-        # and their coordinates are given by rounding the pixel center coordinates up and down. The
-        # contribution of each PSF point is given by the product of the differences in x and y.
-        # TODO there's a degenerate case when the star is exactly on a PSF point (or the x or y
-        # position is an integer)
-        for psf_x, psf_y in [
-            (floor(nearest_pixel_psf_x), floor(nearest_pixel_psf_y)),  # left down
-            (floor(nearest_pixel_psf_x), ceil(nearest_pixel_psf_y)),  # right down
-            (ceil(nearest_pixel_psf_x), floor(nearest_pixel_psf_y)),  # left up
-            (ceil(nearest_pixel_psf_x), ceil(nearest_pixel_psf_y)),  # right up
-        ]:
-            epsf_contributions_to_pixels[nearest_pixel_y, nearest_pixel_x, psf_y, psf_x] = np.abs(
-                (nearest_pixel_psf_x - psf_x) * (nearest_pixel_psf_y - psf_y)
-            )
+        for pixel_x in (pixels_in_psf_x + nearest_pixel_x).astype(int):
+            for pixel_y in (pixels_in_epsf_y + nearest_pixel_y).astype(int):
+                # Get the coordinate of the nearest pixel center in coordinates of the PSF grid, with
+                # the bottom left PSF point at (0, 0) and distance 1 between adjacent PSF points.
+                pixel_psf_x, pixel_psf_y = (
+                    (pixel_x - x) / oversample_factor + oversampled_psf_shape[1] // 2,
+                    (pixel_y - y) / oversample_factor + oversampled_psf_shape[0] // 2,
+                )
+                # The four closest PSF points are interpolated to give the PSF model value of the pixel,
+                # and their coordinates are given by rounding the pixel center coordinates up and down. The
+                # contribution of each PSF point is given by the product of the differences in x and y.
+                for psf_x, psf_y in [
+                    (floor(pixel_psf_x), floor(pixel_psf_y)),  # left down
+                    (floor(pixel_psf_x), ceil(pixel_psf_y)),  # right down
+                    (ceil(pixel_psf_x), floor(pixel_psf_y)),  # left up
+                    (ceil(pixel_psf_x), ceil(pixel_psf_y)),  # right up
+                ]:
+                    # TODO explain or give better names
+                    x_interpolation = np.abs(pixel_psf_x - psf_x) or 1.0
+                    y_interpolation = np.abs(pixel_psf_y - psf_y) or 1.0
+                    epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] = np.abs(
+                        x_interpolation * y_interpolation
+                    )
 
     # To calculate the linear gradients, we need the x and y coordinates of each pixel.
     image_pixel_xs, image_pixel_ys = get_xy_coordinates_centered_at_zero(image_shape)

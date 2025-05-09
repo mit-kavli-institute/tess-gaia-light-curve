@@ -8,7 +8,7 @@ def test_make_tglc_design_matrix():
     image_shape = (150, 150)
     psf_shape_pixels = (11, 11)
     oversample_factor = 2
-    star_positions = np.array([[10.5, 10.5]])
+    star_positions = np.array([[10, 10]])
     background_strap_mask = np.zeros(image_shape)
     edge_compression_scale_factor = 1e-4
 
