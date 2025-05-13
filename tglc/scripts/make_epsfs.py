@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from tglc.effective_psf import fit_psf, get_psf
+from tglc.epsf import fit_epsf, make_tglc_design_matrix
 from tglc.ffi import Source
 from tglc.util.multiprocessing import pool_map_if_multiprocessing
 
@@ -18,27 +18,77 @@ from tglc.util.multiprocessing import pool_map_if_multiprocessing
 logger = logging.getLogger(__name__)
 
 
-def fit_epsf(
+def fit_epsf_for_source(
     source: Source,
     psf_size: int,
-    oversample_factor: float,
+    oversample_factor: int,
     edge_compression_factor: float,
-    brightness_power: float,
-) -> np.ndarray:
-    """Fit an epsf for the FFI cutout `Source`."""
+    flux_uncertainty_power: float,
+    use_sparse: bool = True,
+):
+    """
+    Fit an ePSF for each cadence in a `Source` object.
+
+    Parameters
+    ----------
+    source : Source
+        FFI cutout `Source` object with observed flux, star positions, and star brightnesses.
+    psf_size : int
+        Side length of ePSF in pixels.
+    oversample_factor : int
+        Factor by which to oversample the ePSF compared to image pixels.
+    flux_uncertainty_power : float
+        Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes
+        contributions from dimmer stars, 1 means all contributions are equal.
+    use_sparse : bool
+        If `True`, use `scipy.sparse` methods to represent the design matrix and carry out the ePSF
+        fit. Generally much more efficient.
+
+    Returns
+    -------
+    epsf : array
+        2D array where first dimension corresponds to cadences in `source` and second dimension
+        contains the best-fit ePSF parameters per cadence.
+    """
     logger.debug(
         f"Fitting ePSF for source in {source.camera}-{source.ccd} at {source.ccd_x}, {source.ccd_y}"
     )
-    A, _, oversampled_psf_size, _, _ = get_psf(
-        source,
-        psf_size=psf_size,
-        factor=oversample_factor,
-        edge_compression=edge_compression_factor,
+    star_positions = np.array(
+        [source.gaia[f"sector_{source.sector}_x"], source.gaia[f"sector_{source.sector}_y"]]
+    ).T
+    design_matrix, regularization_extension_size = make_tglc_design_matrix(
+        source.flux.shape[1:],
+        (psf_size, psf_size),
+        oversample_factor,
+        star_positions,
+        source.gaia["tess_flux_ratio"].data,
+        source.mask.data,
+        edge_compression_factor,
     )
-    background_degrees_of_freedom = 6
-    e_psf = np.zeros((len(source.time), oversampled_psf_size**2 + background_degrees_of_freedom))
-    for i in range(len(source.time)):
-        e_psf[i] = fit_psf(A, source, oversampled_psf_size, power=brightness_power, time=i)
+    if use_sparse:
+        # The matrix will have some rows filtered out corresponding to bad pixels, so use a CSR
+        # sparse array
+        from scipy import sparse
+
+        design_matrix = sparse.csr_array(design_matrix)
+
+    # Mask out saturated pixels as a base
+    base_flux_mask = source.mask.mask
+    e_psf = np.zeros((len(source.time), design_matrix.shape[1]))
+    # JIT-ing this loop using numba did not give much performance benefit. Maybe vectorizing would?
+    for i in range(source.flux.shape[0]):
+        try:
+            # fit_epsf will automatically use `scipy.linalg.lsmr` if `design_matrix` is sparse.
+            e_psf[i] = fit_epsf(
+                design_matrix,
+                source.flux[i],
+                base_flux_mask,
+                flux_uncertainty_power,
+                regularization_extension_size,
+            )
+        except np.linalg.LinAlgError as e:
+            logger.warning(f"Error while fitting ePSF: {e}")
+            e_psf[i] = np.nan
     return e_psf
 
 
@@ -46,12 +96,18 @@ def read_source_and_fit_and_save_epsf(
     source_and_epsf_files: tuple[Path, Path],
     replace: bool,
     psf_size: int,
-    oversample_factor: float,
+    oversample_factor: int,
     edge_compression_factor: float,
-    brightness_power: float,
+    flux_uncertainty_power: float,
+    use_sparse: bool = True,
 ):
-    """Designed for multiprocessing pool with a functools partial, so unpacks file paths from first
-    argument.
+    """
+    Read a pickled `Source` object, fit an ePSF for each of its cadences, and save the results.
+
+    Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
+    unpacks I/O file paths from first argument.
+
+    Most arguments are passed to `fit_epsf_for_source`.
     """
     source_file, epsf_output_file = source_and_epsf_files
     if not replace and epsf_output_file.is_file():
@@ -59,8 +115,15 @@ def read_source_and_fit_and_save_epsf(
         return
     with source_file.open("rb") as source_pickle:
         source: Source = pickle.load(source_pickle)
-    e_psf = fit_epsf(source, psf_size, oversample_factor, edge_compression_factor, brightness_power)
-    np.save(epsf_output_file, e_psf)
+    epsf = fit_epsf_for_source(
+        source,
+        psf_size,
+        oversample_factor,
+        edge_compression_factor,
+        flux_uncertainty_power,
+        use_sparse=use_sparse,
+    )
+    np.save(epsf_output_file, epsf)
 
 
 def make_epsfs_main(args: argparse.Namespace):
@@ -77,6 +140,7 @@ def make_epsfs_main(args: argparse.Namespace):
             ccd_source_directory = source_directory / f"{camera}-{ccd}"
             ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
             ccd_epsf_directory = epsf_directory / f"{camera}-{ccd}"
+            ccd_epsf_directory.mkdir(exist_ok=True)
             ccd_epsf_files = [
                 ccd_epsf_directory
                 / (
@@ -94,7 +158,8 @@ def make_epsfs_main(args: argparse.Namespace):
                     psf_size=args.psf_size,
                     oversample_factor=args.oversample,
                     edge_compression_factor=args.edge_compression_factor,
-                    brightness_power=args.brightness_power,
+                    flux_uncertainty_power=args.uncertainty_power,
+                    use_sparse=not args.no_sparse,
                 )
                 fit_and_save_epsf_iterator = pool_map_if_multiprocessing(
                     fit_and_save_epsf_with_argparse_args,
@@ -110,7 +175,3 @@ def make_epsfs_main(args: argparse.Namespace):
                         total=len(ccd_source_files),
                     ):
                         pass
-
-
-if __name__ == "__main__":
-    make_epsfs_main()

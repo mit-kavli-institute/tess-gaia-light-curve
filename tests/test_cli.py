@@ -8,7 +8,7 @@ import importlib
 import os
 from pathlib import Path
 
-from tglc.util import cli
+from tglc import cli
 
 
 @contextmanager
@@ -27,7 +27,7 @@ def tmp_chdir(path):
 
 
 def test_base_parser_has_expected_arguments():
-    parser = cli.base_parser
+    parser = cli.command_base_parser
     args = parser.parse_args([])
 
     assert isinstance(args.nprocs, int)
@@ -42,7 +42,7 @@ def test_tglc_data_dir_finds_current(tmp_path: Path):
     tglc_data_dir.mkdir()
 
     with tmp_chdir(tglc_data_dir):
-        args = cli.base_parser.parse_args([])
+        args = cli.command_base_parser.parse_args([])
         assert args.tglc_data_dir == tglc_data_dir
 
 
@@ -52,11 +52,11 @@ def test_tglc_data_dir_finds_parent(tmp_path: Path):
     working_directory.mkdir(parents=True)
 
     with tmp_chdir(working_directory):
-        args = cli.base_parser.parse_args([])
+        args = cli.command_base_parser.parse_args([])
         assert args.tglc_data_dir == tglc_data_dir
 
 
 def test_tglc_data_dir_falls_back_to_cwd(tmp_path: Path):
     with tmp_chdir(tmp_path):
-        args = cli.base_parser.parse_args([])
+        args = cli.command_base_parser.parse_args([])
         assert args.tglc_data_dir == tmp_path

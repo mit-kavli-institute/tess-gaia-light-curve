@@ -2,31 +2,65 @@
 
 from math import ceil, floor
 
+from numba import jit
 import numpy as np
+from scipy import sparse
 
 
+@jit
 def get_xy_coordinates_centered_at_zero(shape: tuple[int, int]):
-    return np.meshgrid(
-        np.arange(shape[1]) - (shape[1] - 1) / 2, np.arange(shape[0]) - (shape[0] - 1) / 2
-    )
+    """
+    Returns coordinates for an array with the given shape with (0, 0) at the center of the array.
+
+    Returns
+    -------
+    x, y : tuple[array, array]
+        X and Y coordinates.
+    """
+    x_coordinates = np.arange(shape[1]) - (shape[1] - 1) / 2
+    y_coordinates = np.arange(shape[0]) - (shape[0] - 1) / 2
+    return np.repeat(x_coordinates, shape[0]).reshape(shape[::-1]).T, np.repeat(
+        y_coordinates, shape[1]
+    ).reshape(shape)
 
 
+@jit
 def make_tglc_design_matrix(
     image_shape: tuple[int, int],
     psf_shape_pixels: tuple[int, int],
     oversample_factor: int,
     star_positions: np.ndarray,
+    star_flux_ratios: np.ndarray,
     background_strap_mask: np.ndarray,
     edge_compression_scale_factor: float,
 ):
     """
     Construct the TGLC design matrix from equation (3) of Han & Brandt, 2023.
 
+    Parameters
+    ----------
+    image_shape : tuple[int, int]
+        Shape of image (FFI cutout) that will be used as observed data.
+    psf_shape_pixels : tuple[int, int]
+        Extent of ePSF array in pixels.
+    oversample_factor : int
+        Factor by which to oversample the ePSF compared to image pixels.
+    star_positions : array
+        Positions of stars in image with shape (n, 2). The first column is `x` and the second column
+        is `y`. Same order as `star_flux_ratios`.
+    star_flux_ratios : array
+        Ratio of flux from each star to maximum flux from any star, where flux is calculated using
+        catalog brightness for each star. Shape (n,) and same order as `star_positions`.
+    background_strap_mask : array
+        Mask giving the background strap values for each pixel.
+    edge_compression_scale_factor : float
+        Scale factor used when forcing edges of ePSF to 0.
+
     Returns
     -------
-    design_matrix, regularization_zeros : tuple[array, int]
-        Design matrix and number of zeros that should be appended to observed vectors for
-        regularization during fitting.
+    design_matrix, regularization_extension_size : tuple[array, int]
+        Design matrix and amount that observed vectors need to be extended by for regularization
+        during fitting.
     """
     oversampled_psf_shape = (
         psf_shape_pixels[0] * oversample_factor + 1,
@@ -37,32 +71,43 @@ def make_tglc_design_matrix(
     epsf_contributions_to_pixels = np.zeros(
         (image_shape[0], image_shape[1], oversampled_psf_shape[0], oversampled_psf_shape[1])
     )
-    pixels_in_psf_x = np.arange(psf_shape_pixels[1]) - (psf_shape_pixels[1] - 1) / 2
-    pixels_in_epsf_y = np.arange(psf_shape_pixels[0]) - (psf_shape_pixels[0] - 1) / 2
-    for x, y in star_positions:
+    pixels_in_epsf_x = (
+        np.arange(psf_shape_pixels[1], dtype=np.int64) - (psf_shape_pixels[1] - 1) // 2
+    )
+    pixels_in_epsf_y = (
+        np.arange(psf_shape_pixels[0], dtype=np.int64) - (psf_shape_pixels[0] - 1) // 2
+    )
+    for (x, y), flux_ratio in zip(star_positions, star_flux_ratios):
         nearest_pixel_x, nearest_pixel_y = (round(x), round(y))
-        for pixel_x in (pixels_in_psf_x + nearest_pixel_x).astype(int):
-            for pixel_y in (pixels_in_epsf_y + nearest_pixel_y).astype(int):
-                # Get the coordinate of the nearest pixel center in coordinates of the PSF grid, with
-                # the bottom left PSF point at (0, 0) and distance 1 between adjacent PSF points.
+        for pixel_x in pixels_in_epsf_x + nearest_pixel_x:
+            if pixel_x < 0 or pixel_x >= image_shape[1]:
+                continue
+            for pixel_y in pixels_in_epsf_y + nearest_pixel_y:
+                if pixel_y < 0 or pixel_y >= image_shape[0]:
+                    continue
+                # Get the coordinate of the nearest pixel center in coordinates of the PSF grid,
+                # with the bottom left PSF point at (0, 0) and distance 1 between adjacent PSF
+                # points.
                 pixel_psf_x, pixel_psf_y = (
-                    (pixel_x - x) / oversample_factor + oversampled_psf_shape[1] // 2,
-                    (pixel_y - y) / oversample_factor + oversampled_psf_shape[0] // 2,
+                    (pixel_x - x) * oversample_factor + oversampled_psf_shape[1] // 2,
+                    (pixel_y - y) * oversample_factor + oversampled_psf_shape[0] // 2,
                 )
-                # The four closest PSF points are interpolated to give the PSF model value of the pixel,
-                # and their coordinates are given by rounding the pixel center coordinates up and down. The
-                # contribution of each PSF point is given by the product of the differences in x and y.
+                # The four closest PSF points are bilinearly interpolated to give the PSF model
+                # value of the pixel, and their coordinates are given by rounding the pixel center
+                # coordinates up and down. The contribution from each pixel is the weight it is
+                # given in the bilinear interpolation, which is the product of the distances in the
+                # x and y directions. We further weight the contribution in importance by the flux
+                # ratio of the current star.
                 for psf_x, psf_y in [
                     (floor(pixel_psf_x), floor(pixel_psf_y)),  # left down
                     (floor(pixel_psf_x), ceil(pixel_psf_y)),  # right down
                     (ceil(pixel_psf_x), floor(pixel_psf_y)),  # left up
                     (ceil(pixel_psf_x), ceil(pixel_psf_y)),  # right up
                 ]:
-                    # TODO explain or give better names
                     x_interpolation = np.abs(pixel_psf_x - psf_x) or 1.0
                     y_interpolation = np.abs(pixel_psf_y - psf_y) or 1.0
-                    epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] = np.abs(
-                        x_interpolation * y_interpolation
+                    epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] = (
+                        flux_ratio * np.abs(x_interpolation * y_interpolation)
                     )
 
     # To calculate the linear gradients, we need the x and y coordinates of each pixel.
@@ -70,24 +115,25 @@ def make_tglc_design_matrix(
     # background_contributions_to_pixels[iy, ix, b] is the contribution of background parameter b to
     # pixel (ix, iy) in the image.
     background_contribution_to_pixels = np.stack(
-        [
+        (
             np.ones(image_shape),  # flat background level => same contribution to each point
             image_pixel_ys,  # y component of linear gradient => use x coordinate of each point
             image_pixel_xs,  # x component of linear gradient => use y coordinate of each point
             background_strap_mask,  # flat contribution of background straps
             background_strap_mask * image_pixel_ys,  # y-dependent contribution of background straps
             background_strap_mask * image_pixel_xs,  # x-dependent contribution of background straps
-        ]
+        ),
+        axis=-1,
     )
 
     # Construct the full design matrix by flattening image coordinates.
     design_matrix = np.hstack(
-        [
+        (
             epsf_contributions_to_pixels.reshape(
                 image_shape[0] * image_shape[1], oversampled_psf_shape[0] * oversampled_psf_shape[1]
             ),
             background_contribution_to_pixels.reshape(image_shape[0] * image_shape[1], -1),
-        ]
+        )
     )
 
     # With the current set up, the flat background level could be partly fitted in the ePSF by
@@ -108,7 +154,7 @@ def make_tglc_design_matrix(
         )
     )
     edge_compression_block = np.hstack(
-        [
+        (
             np.diag(
                 psf_distance_from_center_weight.reshape(
                     oversampled_psf_shape[0] * oversampled_psf_shape[1]
@@ -117,24 +163,70 @@ def make_tglc_design_matrix(
             np.zeros(
                 (
                     oversampled_psf_shape[0] * oversampled_psf_shape[1],
-                    background_contribution_to_pixels.shape[0],
+                    background_contribution_to_pixels.shape[-1],
                 )
             ),
-        ]
+        )
     )
 
     return (
-        np.vstack([design_matrix, edge_compression_block]),
+        np.vstack((design_matrix, edge_compression_block)),
         oversampled_psf_shape[0] * oversampled_psf_shape[1],
     )
 
 
-# @guvectorize([(float64[:, :], float64[:], float64, float64, float64[:])], ("(m,n),(n),(),(m)"))
-def fit_psf(
+def fit_epsf(
     design_matrix: np.ndarray,
     flux: np.ndarray,
-    pixel_weight_power: float,
-    result: np.ndarray,
+    base_flux_mask: np.ndarray,
+    flux_uncertainty_power: float,
+    regularization_dimensions: int,
 ):
-    uncertainty_scale = 1 / (flux**pixel_weight_power)
-    return np.linalg.lstsq(design_matrix * uncertainty_scale, flux * uncertainty_scale)
+    """
+    Find the best-fit ePSF parameters given a design matrix and observed flux values.
+
+    Uses `scipy.sparse.linalg.lsmr` when `design_matrix` is sparse, otherwise `np.linalg.lstsq`.
+
+    Parameters
+    ----------
+    design_matrix : array
+        2D matrix with shape `(m + r, n)` where `m` is the number of pixels in image, `r` is the
+        number of extra dimensions used for regularization, and `n` is the number of parameters in
+        the ePSF model.
+    flux : array
+        2D array of observed flux values with shape `(a, b)` where `a * b == m`.
+    base_flux_mask : array[bool]
+        2D mask array indicating bad (e.g., saturated) pixels. Pixels lower than 0.8 times the
+        median flux are masked in addition.
+    flux_uncertainty_power : float
+        Power of pixel value used as observational uncertainty in fit. <1 emphasizes contributions
+        from dimmer stars, 1 means all contributions are equal.
+    regularization_dimensions : int
+        Number of extra dimensions used for regularization. Must be added to observed vector.
+
+    Returns
+    -------
+    epsf_parameters : array
+        Array of best-fit ePSF parameters.
+    """
+    flux_uncertainty_scale = 1 / (flux**flux_uncertainty_power)
+    flux_mask = base_flux_mask | (flux < 0.8 * np.nanmedian(flux))
+
+    # Set up observed vector accounting for regularization
+    observed_vector = np.hstack((flux.flatten(), np.zeros(regularization_dimensions)))
+    uncertainty_scale = np.hstack(
+        (flux_uncertainty_scale.flatten(), np.ones(regularization_dimensions))
+    )
+    mask = np.hstack((flux_mask.flatten(), np.zeros(regularization_dimensions, dtype=np.bool)))
+
+    if sparse.issparse(design_matrix):
+        result, _istop, _itn, _normr, _normar, _norma, _conda, _normx = sparse.linalg.lsmr(
+            (design_matrix * uncertainty_scale[:, np.newaxis]).tocsc()[~mask],
+            (observed_vector * uncertainty_scale)[~mask],
+        )
+    else:
+        result, _residuals, _rank, _s = np.linalg.lstsq(
+            (design_matrix * uncertainty_scale[:, np.newaxis])[~mask],
+            (observed_vector * uncertainty_scale)[~mask],
+        )
+    return result

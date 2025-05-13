@@ -63,7 +63,7 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     catalogs_parser.add_argument(
-        "-o", "--orbit", type=int, required=True, help="Orbit to query for"
+        "-o", "--orbit", type=int, required=True, help="TESS orbit of observations to query"
     )
     catalogs_parser.add_argument(
         "--output-dir",
@@ -81,7 +81,7 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     cutouts_parser.add_argument(
-        "-o", "--orbit", type=int, required=True, help="Orbit containing full frame images"
+        "-o", "--orbit", type=int, required=True, help="TESS orbit of observations."
     )
     cutouts_parser.add_argument(
         "-s", "--cutout-size", type=int, default=150, help="Cutout side length. Default=150."
@@ -103,20 +103,26 @@ def parse_tglc_args() -> argparse.Namespace:
         "--oversample",
         type=int,
         default=2,
-        help="Factor by which to oversample when fitting the ePSF. Default=2",
+        help="Factor by which to oversample the ePSF compared to image pixels. Default=2",
     )
     epsfs_parser.add_argument(
-        "--brightness-power",
+        "--uncertainty-power",
         type=float,
         default=1.4,
-        help="Weighting of bright stars' contribution to ePSF fit. 1 means same contribution from "
-        "all stars, <1 means emphasizing dimmer stars. Default=1.4 was determined empirically.",
+        help="Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes "
+        "contributions from dimmer stars, 1 means all contributions are equal. Default=1.4 "
+        "determined empirically.",
     )
     epsfs_parser.add_argument(
         "--edge-compression-factor",
         type=float,
         default=1e-4,
-        help="Factor to scale the contributions of the edges of the ePSF. Default=1e-4.",
+        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+    )
+    epsfs_parser.add_argument(
+        "--no-sparse",
+        action="store_true",
+        help="Do not use scipy.sparse methods to fit ePSFs.",
     )
 
     lightcurves_parser = tglc_commands.add_parser(
