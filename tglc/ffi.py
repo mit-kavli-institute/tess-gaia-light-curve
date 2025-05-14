@@ -465,7 +465,7 @@ def ffi(
         Replace existing files with new data. Default = False.
     """
     base_directory = Path(base_directory)
-    ffi_directory = base_directory / "ffi"
+    ffi_directory = base_directory / "ffi" / f"{camera}-{ccd}"
     ffi_files = list(ffi_directory.glob(f"*cam{camera}-ccd{ccd}*_img.fits"))
 
     if len(ffi_files) == 0:
