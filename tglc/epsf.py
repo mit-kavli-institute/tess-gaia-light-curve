@@ -4,7 +4,8 @@ from math import ceil, floor
 
 from numba import jit
 import numpy as np
-from scipy import sparse
+
+from tglc.util._optional_deps import HAS_CUPY
 
 
 @jit
@@ -185,7 +186,8 @@ def fit_epsf(
     """
     Find the best-fit ePSF parameters given a design matrix and observed flux values.
 
-    Uses `scipy.sparse.linalg.lsmr` when `design_matrix` is sparse, otherwise `np.linalg.lstsq`.
+    Uses `xp.linalg.lstsq` where `xp` is numpy or cupy by default. If `design_matrix` is sparse,
+    uses `lsmr` from `cupyx.scipy.sparse.linalg` or `scipy.sparse.linalg`.
 
     Parameters
     ----------
@@ -209,7 +211,7 @@ def fit_epsf(
     epsf_parameters : array
         Array of best-fit ePSF parameters.
     """
-    flux_uncertainty_scale = 1 / (flux**flux_uncertainty_power)
+    flux_uncertainty_scale = 1 / (np.abs(flux)**flux_uncertainty_power)
     flux_mask = base_flux_mask | (flux < 0.8 * np.nanmedian(flux))
 
     # Set up observed vector accounting for regularization
@@ -219,13 +221,26 @@ def fit_epsf(
     )
     mask = np.hstack((flux_mask.flatten(), np.zeros(regularization_dimensions, dtype=np.bool)))
 
+    if HAS_CUPY:
+        import cupy as cp
+
+        xp = cp.get_array_module(design_matrix, flux)
+        if xp == cp:
+            from cupyx.scipy import sparse
+            from cupyx.scipy.sparse import linalg
+        else:
+            from scipy import sparse
+    else:
+        from scipy import sparse
+        xp = np
+
     if sparse.issparse(design_matrix):
         result, _istop, _itn, _normr, _normar, _norma, _conda, _normx = sparse.linalg.lsmr(
-            (design_matrix * uncertainty_scale[:, np.newaxis]).tocsc()[~mask],
+            (design_matrix.multiply(uncertainty_scale[:, np.newaxis])).tocsr()[~mask],
             (observed_vector * uncertainty_scale)[~mask],
         )
     else:
-        result, _residuals, _rank, _s = np.linalg.lstsq(
+        result, _residuals, _rank, _s = xp.linalg.lstsq(
             (design_matrix * uncertainty_scale[:, np.newaxis])[~mask],
             (observed_vector * uncertainty_scale)[~mask],
         )

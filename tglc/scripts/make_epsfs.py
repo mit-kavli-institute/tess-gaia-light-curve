@@ -3,8 +3,10 @@
 import argparse
 from functools import partial
 import logging
+import multiprocessing
 from pathlib import Path
 import pickle
+import re
 
 import numpy as np
 from tqdm import tqdm
@@ -12,6 +14,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.epsf import fit_epsf, make_tglc_design_matrix
 from tglc.ffi import Source
+from tglc.util._optional_deps import HAS_CUPY
 from tglc.util.multiprocessing import pool_map_if_multiprocessing
 
 
@@ -25,9 +28,12 @@ def fit_epsf_for_source(
     edge_compression_factor: float,
     flux_uncertainty_power: float,
     use_sparse: bool = True,
+    use_gpu: bool = True,
 ):
     """
     Fit an ePSF for each cadence in a `Source` object.
+
+    Uses sparse linear algebra methods from `scipy` or `cupy`, as appropriate.
 
     Parameters
     ----------
@@ -41,8 +47,11 @@ def fit_epsf_for_source(
         Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes
         contributions from dimmer stars, 1 means all contributions are equal.
     use_sparse : bool
-        If `True`, use `scipy.sparse` methods to represent the design matrix and carry out the ePSF
-        fit. Generally much more efficient.
+        If `True`, use sparse linear algebra methods for the ePSF parameter fit. Generally much more
+        efficient.
+    use_gpu : bool
+        If `True`, use `cupy` to run the ePSF parameter fit on the GPU. Requires `cupy` to be
+        installed and at least one CUDA device to be available.
 
     Returns
     -------
@@ -65,23 +74,37 @@ def fit_epsf_for_source(
         source.mask.data,
         edge_compression_factor,
     )
-    if use_sparse:
-        # The matrix will have some rows filtered out corresponding to bad pixels, so use a CSR
-        # sparse array
-        from scipy import sparse
-
-        design_matrix = sparse.csr_array(design_matrix)
-
+    flux = source.flux
     # Mask out saturated pixels as a base
     base_flux_mask = source.mask.mask
-    e_psf = np.zeros((len(source.time), design_matrix.shape[1]))
+
+    if use_gpu and HAS_CUPY:
+        import cupy as cp
+
+        design_matrix = cp.asarray(design_matrix)
+        flux = cp.asarray(flux)
+        base_flux_mask = cp.asarray(base_flux_mask)
+        xp = cp
+    else:
+        xp = np
+
+    if use_sparse:
+        if use_gpu and HAS_CUPY:
+            from cupyx.scipy import sparse
+        else:
+            from scipy import sparse
+        # The matrix will have some rows filtered out corresponding to bad pixels, so use a CSR
+        # sparse array
+        design_matrix = sparse.csr_matrix(design_matrix)
+
+    e_psf = xp.zeros((flux.shape[0], design_matrix.shape[1]))
     # JIT-ing this loop using numba did not give much performance benefit. Maybe vectorizing would?
-    for i in range(source.flux.shape[0]):
+    for i in range(flux.shape[0]):
         try:
-            # fit_epsf will automatically use `scipy.linalg.lsmr` if `design_matrix` is sparse.
+            # fit_epsf will automatically use the appropriate lstsq method.
             e_psf[i] = fit_epsf(
                 design_matrix,
-                source.flux[i],
+                flux[i],
                 base_flux_mask,
                 flux_uncertainty_power,
                 regularization_extension_size,
@@ -89,6 +112,8 @@ def fit_epsf_for_source(
         except np.linalg.LinAlgError as e:
             logger.warning(f"Error while fitting ePSF: {e}")
             e_psf[i] = np.nan
+    if xp != np:
+        e_psf = e_psf.get()
     return e_psf
 
 
@@ -100,6 +125,7 @@ def read_source_and_fit_and_save_epsf(
     edge_compression_factor: float,
     flux_uncertainty_power: float,
     use_sparse: bool = True,
+    use_gpu: bool = True,
 ):
     """
     Read a pickled `Source` object, fit an ePSF for each of its cadences, and save the results.
@@ -115,14 +141,37 @@ def read_source_and_fit_and_save_epsf(
         return
     with source_file.open("rb") as source_pickle:
         source: Source = pickle.load(source_pickle)
-    epsf = fit_epsf_for_source(
-        source,
-        psf_size,
-        oversample_factor,
-        edge_compression_factor,
-        flux_uncertainty_power,
-        use_sparse=use_sparse,
-    )
+
+    if use_gpu and HAS_CUPY:
+        # Figure out which GPU to use, making sure they're evenly disributed
+        import cupy
+
+        process_name = multiprocessing.current_process().name
+        pool_worker_name_match = re.match(r".*PoolWorker-(\d+)", process_name)
+        if pool_worker_name_match:
+            pool_worker_id = int(pool_worker_name_match[1])
+            cuda_device = (pool_worker_id - 1) % cupy.cuda.runtime.getDeviceCount()
+            logger.debug(f"Pool worker {process_name} using GPU {cuda_device}")
+        else:
+            logger.debug(f"Non-pool process {process_name} using GPU 0")
+            cuda_device = 0
+        cuda_device_context = cupy.cuda.Device(cuda_device)
+    else:
+        from contextlib import nullcontext
+
+        cuda_device = None
+        cuda_device_context = nullcontext()
+
+    with cuda_device_context:
+        epsf = fit_epsf_for_source(
+            source,
+            psf_size,
+            oversample_factor,
+            edge_compression_factor,
+            flux_uncertainty_power,
+            use_sparse=use_sparse,
+            use_gpu=use_gpu,
+        )
     np.save(epsf_output_file, epsf)
 
 
@@ -131,7 +180,7 @@ def make_epsfs_main(args: argparse.Namespace):
     source_directory = orbit_directory / "source"
     if not source_directory.is_dir():
         logger.error("Source directory not found, exiting")
-        exit()
+        return
     epsf_directory = orbit_directory / "epsf"
     epsf_directory.mkdir(exist_ok=True)
 
@@ -151,27 +200,29 @@ def make_epsfs_main(args: argparse.Namespace):
             ]
             if len(ccd_source_files) == 0:
                 logger.warning(f"No source files found for {camera}-{ccd}, skipping")
-            else:
-                fit_and_save_epsf_with_argparse_args = partial(
-                    read_source_and_fit_and_save_epsf,
-                    replace=args.replace,
-                    psf_size=args.psf_size,
-                    oversample_factor=args.oversample,
-                    edge_compression_factor=args.edge_compression_factor,
-                    flux_uncertainty_power=args.uncertainty_power,
-                    use_sparse=not args.no_sparse,
-                )
-                fit_and_save_epsf_iterator = pool_map_if_multiprocessing(
-                    fit_and_save_epsf_with_argparse_args,
-                    zip(ccd_source_files, ccd_epsf_files),
-                    nprocs=args.nprocs,
-                    pool_map_method="imap_unordered",
-                )
-                with logging_redirect_tqdm():
-                    for _ in tqdm(
-                        fit_and_save_epsf_iterator,
-                        desc=f"Fitting ePSFs for {camera}-{ccd}",
-                        unit="cutout",
-                        total=len(ccd_source_files),
-                    ):
-                        pass
+                continue
+
+            fit_and_save_epsf_with_argparse_args = partial(
+                read_source_and_fit_and_save_epsf,
+                replace=args.replace,
+                psf_size=args.psf_size,
+                oversample_factor=args.oversample,
+                edge_compression_factor=args.edge_compression_factor,
+                flux_uncertainty_power=args.uncertainty_power,
+                use_sparse=not args.no_sparse,
+                use_gpu=not args.no_gpu,
+            )
+            fit_and_save_epsf_iterator = pool_map_if_multiprocessing(
+                fit_and_save_epsf_with_argparse_args,
+                zip(ccd_source_files, ccd_epsf_files),
+                nprocs=args.nprocs,
+                pool_map_method="imap_unordered",
+            )
+            with logging_redirect_tqdm():
+                for _ in tqdm(
+                    fit_and_save_epsf_iterator,
+                    desc=f"Fitting ePSFs for {camera}-{ccd}",
+                    unit="cutout",
+                    total=len(ccd_source_files),
+                ):
+                    pass

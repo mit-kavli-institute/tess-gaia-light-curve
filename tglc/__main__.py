@@ -18,8 +18,15 @@ def tglc_main():
     args = parse_tglc_args()
     setup_logging(args.debug, args.logfile)
     logger.info(f"TGLC version {tglc_version}")
-    # "fork" method is needed for proper logging
-    set_start_method("fork")
+
+    if args.tglc_command == "epsfs" and not args.no_gpu:
+        # For GPU multiprocessing, the "spawn" method is necessary.
+        # TODO logging from workers gets ignored currently; figure out how to fix this.
+        set_start_method("spawn")
+    else:
+        # Otherwise, the "fork" method is best for proper logging.
+        set_start_method("fork")
+
     if args.nprocs > 1:
         # Stop numpy & other math libraries from multithreading
         # on top of our multiprocessing

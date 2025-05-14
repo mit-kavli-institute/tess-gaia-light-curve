@@ -122,7 +122,12 @@ def parse_tglc_args() -> argparse.Namespace:
     epsfs_parser.add_argument(
         "--no-sparse",
         action="store_true",
-        help="Do not use scipy.sparse methods to fit ePSFs.",
+        help="Do not use scipy sparse linear algebra methods to fit ePSFs",
+    )
+    epsfs_parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Do not use GPUs to fit ePSFs (ignored if cupy is not installed)",
     )
 
     lightcurves_parser = tglc_commands.add_parser(
