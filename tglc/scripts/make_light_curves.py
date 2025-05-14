@@ -78,11 +78,16 @@ def make_light_curves_main(args: argparse.Namespace):
     (orbit_directory / "lc").mkdir(exist_ok=True)
 
     with Pool(args.nprocs) as pool:
-        make_light_curves_for_ccd = partial(
+        make_light_curves_in_local_directory = partial(
             make_light_curves_for_cutout, local_directory=orbit_directory
         )
         pool.starmap(
-            make_light_curves_for_ccd, product(range(1, 5), range(1, 5), range(14), range(14))
+            make_light_curves_in_local_directory, product(
+                [cam for cam, ccd in args.ccd],
+                [ccd for cam, ccd in args.ccd],
+                range(14),
+                range(14),
+            )
         )
 
 

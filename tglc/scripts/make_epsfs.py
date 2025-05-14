@@ -184,45 +184,44 @@ def make_epsfs_main(args: argparse.Namespace):
     epsf_directory = orbit_directory / "epsf"
     epsf_directory.mkdir(exist_ok=True)
 
-    for camera in range(1, 5):
-        for ccd in range(1, 5):
-            ccd_source_directory = source_directory / f"{camera}-{ccd}"
-            ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
-            ccd_epsf_directory = epsf_directory / f"{camera}-{ccd}"
-            ccd_epsf_directory.mkdir(exist_ok=True)
-            ccd_epsf_files = [
-                ccd_epsf_directory
-                / (
-                    f"epsf{source_file.stem.removeprefix('source')}"
-                    f"_orbit_{args.orbit}_{camera}-{ccd}.npy"
-                )
-                for source_file in ccd_source_files
-            ]
-            if len(ccd_source_files) == 0:
-                logger.warning(f"No source files found for {camera}-{ccd}, skipping")
-                continue
+    for camera, ccd in args.ccd:
+        ccd_source_directory = source_directory / f"{camera}-{ccd}"
+        ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
+        ccd_epsf_directory = epsf_directory / f"{camera}-{ccd}"
+        ccd_epsf_directory.mkdir(exist_ok=True)
+        ccd_epsf_files = [
+            ccd_epsf_directory
+            / (
+                f"epsf{source_file.stem.removeprefix('source')}"
+                f"_orbit_{args.orbit}_{camera}-{ccd}.npy"
+            )
+            for source_file in ccd_source_files
+        ]
+        if len(ccd_source_files) == 0:
+            logger.warning(f"No source files found for {camera}-{ccd}, skipping")
+            continue
 
-            fit_and_save_epsf_with_argparse_args = partial(
-                read_source_and_fit_and_save_epsf,
-                replace=args.replace,
-                psf_size=args.psf_size,
-                oversample_factor=args.oversample,
-                edge_compression_factor=args.edge_compression_factor,
-                flux_uncertainty_power=args.uncertainty_power,
-                use_sparse=not args.no_sparse,
-                use_gpu=not args.no_gpu,
-            )
-            fit_and_save_epsf_iterator = pool_map_if_multiprocessing(
-                fit_and_save_epsf_with_argparse_args,
-                zip(ccd_source_files, ccd_epsf_files),
-                nprocs=args.nprocs,
-                pool_map_method="imap_unordered",
-            )
-            with logging_redirect_tqdm():
-                for _ in tqdm(
-                    fit_and_save_epsf_iterator,
-                    desc=f"Fitting ePSFs for {camera}-{ccd}",
-                    unit="cutout",
-                    total=len(ccd_source_files),
-                ):
-                    pass
+        fit_and_save_epsf_with_argparse_args = partial(
+            read_source_and_fit_and_save_epsf,
+            replace=args.replace,
+            psf_size=args.psf_size,
+            oversample_factor=args.oversample,
+            edge_compression_factor=args.edge_compression_factor,
+            flux_uncertainty_power=args.uncertainty_power,
+            use_sparse=not args.no_sparse,
+            use_gpu=not args.no_gpu,
+        )
+        fit_and_save_epsf_iterator = pool_map_if_multiprocessing(
+            fit_and_save_epsf_with_argparse_args,
+            zip(ccd_source_files, ccd_epsf_files),
+            nprocs=args.nprocs,
+            pool_map_method="imap_unordered",
+        )
+        with logging_redirect_tqdm():
+            for _ in tqdm(
+                fit_and_save_epsf_iterator,
+                desc=f"Fitting ePSFs for {camera}-{ccd}",
+                unit="cutout",
+                total=len(ccd_source_files),
+            ):
+                pass

@@ -255,13 +255,13 @@ def make_catalog_main(args: argparse.Namespace):
     make_catalogs_iterator = tqdm(
         pool_map_if_multiprocessing(
             make_tic_and_gaia_catalogs_for_camera_and_ccd,
-            product(range(1, 5), repeat=2),
+            args.ccd,
             nprocs=min(args.nprocs, 16),
             pool_map_method="imap_unordered",
         ),
-        desc="Creating catalogs for cameras 1-4, CCDs 1-4",
+        desc=f"Creating catalogs for {len(args.ccd)} CCDs",
         unit="ccd",
-        total=16,
+        total=len(args.ccd),
     )
     with logging_redirect_tqdm():
         # Consume catalog iterator to execute _make_tic_and_gaia_catalogs

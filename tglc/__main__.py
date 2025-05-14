@@ -18,6 +18,8 @@ def tglc_main():
     args = parse_tglc_args()
     setup_logging(args.debug, args.logfile)
     logger.info(f"TGLC version {tglc_version}")
+    printable_args = "\n".join(f"{a}: {getattr(args, a)}" for a in dir(args) if not a.startswith("_"))
+    logger.debug(f"Parsed command line arguments:\n{printable_args}")
 
     if args.tglc_command == "epsfs" and not args.no_gpu:
         # For GPU multiprocessing, the "spawn" method is necessary.

@@ -25,12 +25,33 @@ def get_parent_tglc_data_dir(path: Path):
 TGLC_DATA_DIR_DEFAULT = get_parent_tglc_data_dir(Path.cwd().expanduser()).resolve()
 
 
+def ccd(arg: str) -> tuple[int, int]:
+    """Parse "cam,ccd" as passed to --ccd. Used as a type for argparse."""
+    try:
+        cam, ccd = arg.split(",")
+        cam, ccd = int(cam), int(ccd)
+    except:
+        raise ValueError(f"Invalid CCD specifier: '{arg}'. Should be 'cam,ccd'.")
+    if cam not in range(1, 5):
+        raise ValueError(f"Invalid camera: {cam}. Must be in [1, 2, 3, 4].")
+    if ccd not in range(1, 5):
+        raise ValueError(f"Invalid CCD: {ccd}. Must be in [1, 2, 3, 4].")
+    return cam, ccd
+
+
 command_base_parser = argparse.ArgumentParser(add_help=False)
 command_base_parser.add_argument(
     "-n", "--nprocs", type=int, default=1, help="Number of processes to use"
 )
 command_base_parser.add_argument(
     "-r", "--replace", action="store_true", help="Whether to overwrite existing data products"
+)
+command_base_parser.add_argument(
+    "--ccd",
+    type=ccd,
+    nargs="+",
+    help="cam,ccd pairs to run the command on. For example, --ccd 2,4 specifies camera 2, CCD 4. "
+    "Multiple arguments are allowed separated by spaces, like --ccd 2,4 3,2.",
 )
 command_base_parser.add_argument(
     "--debug", action="store_true", help="Whether to output debug-level logs"
@@ -143,6 +164,8 @@ def parse_tglc_args() -> argparse.Namespace:
     args = tglc_parser.parse_args()
 
     # Custom post-parsing logic
+    if args.ccd is None:
+        args.ccd = [(camera, ccd) for camera in range(1, 5) for ccd in range(1, 5)]
     if args.tglc_command == "catalogs":
         if args.output_dir is None:
             args.output_dir = args.tglc_data_dir / f"orbit{args.orbit:04d}" / "catalogs"
