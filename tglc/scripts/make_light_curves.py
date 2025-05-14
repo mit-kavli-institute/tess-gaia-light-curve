@@ -82,12 +82,13 @@ def make_light_curves_main(args: argparse.Namespace):
             make_light_curves_for_cutout, local_directory=orbit_directory
         )
         pool.starmap(
-            make_light_curves_in_local_directory, product(
+            make_light_curves_in_local_directory,
+            product(
                 [cam for cam, ccd in args.ccd],
                 [ccd for cam, ccd in args.ccd],
                 range(14),
                 range(14),
-            )
+            ),
         )
 
 
