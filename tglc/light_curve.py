@@ -118,7 +118,7 @@ def generate_light_curves(
     psf_size: int,
     psf_oversample_factor: int,
     max_magnitude: float,
-) -> Generator[ApertureLightCurve]:
+) -> Generator[ApertureLightCurve, None, None]:
     """
     Generator function that yields aperture light curves extracted from the source cutout.
 
