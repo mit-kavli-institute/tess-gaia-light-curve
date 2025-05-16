@@ -67,6 +67,7 @@ def make_light_curves_main(args: argparse.Namespace):
             logger.warning(f"ePSF directory for CCD {camera}-{ccd} not found, skipping")
             continue
         ccd_light_curve_directory = light_curve_directory / f"{camera}-{ccd}"
+        ccd_light_curve_directory.mkdir(exist_ok=True)
 
         ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
         with logging_redirect_tqdm():
