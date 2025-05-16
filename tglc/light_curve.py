@@ -16,8 +16,8 @@ from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMeta
 from tglc.aperture_photometry import get_normalized_aperture_photometry
 from tglc.epsf import make_tglc_design_matrix
 from tglc.ffi import Source
-from tglc.util.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
-from tglc.util.tess_ephemeris import get_tess_spacecraft_position
+from tglc.utils.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
+from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
 
 logger = logging.getLogger(__name__)

@@ -12,7 +12,7 @@ import astropy.units as u
 import numpy as np
 import pandas as pd
 
-from tglc.util.data import ephemerides
+from tglc.utils.data import ephemerides
 
 
 def get_ephemeris_file_path(sector: int) -> Path:

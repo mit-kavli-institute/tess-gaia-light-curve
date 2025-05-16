@@ -11,7 +11,7 @@ from astropy.timeseries import TimeSeries
 import h5py
 import numpy as np
 
-from tglc.util.constants import TESSJD
+from tglc.utils.constants import TESSJD
 
 
 @dataclass

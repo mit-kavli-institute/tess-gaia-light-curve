@@ -5,7 +5,7 @@ from astropy.table import QTable
 import numpy as np
 from scipy.ndimage import center_of_mass
 
-from tglc.util.constants import (
+from tglc.utils.constants import (
     TESS_PIXEL_SATURATION_LEVEL,
     convert_tess_flux_to_tess_magnitude,
     convert_tess_magnitude_to_tess_flux,

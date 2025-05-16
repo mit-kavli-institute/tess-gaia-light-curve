@@ -8,7 +8,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 
-from tglc.util.constants import (
+from tglc.utils.constants import (
     TESS_PIXEL_SATURATION_LEVEL,
     TESS_PIXEL_SCALE,
     convert_gaia_mags_to_tmag,

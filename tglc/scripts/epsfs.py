@@ -16,8 +16,8 @@ import numpy as np
 
 from tglc.epsf import fit_epsf, make_tglc_design_matrix
 from tglc.ffi import Source
-from tglc.util._optional_deps import HAS_CUPY
-from tglc.util.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
+from tglc.utils._optional_deps import HAS_CUPY
+from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = logging.getLogger(__name__)

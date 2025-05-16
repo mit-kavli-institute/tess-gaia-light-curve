@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 from tglc.ffi import ffi
-from tglc.util.constants import get_sector_containing_orbit
+from tglc.utils.constants import get_sector_containing_orbit
 
 
 logger = logging.getLogger(__name__)

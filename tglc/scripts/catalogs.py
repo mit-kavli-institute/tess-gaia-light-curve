@@ -17,8 +17,8 @@ import sqlalchemy as sa
 import tesswcs
 
 from tglc.databases import TIC, Gaia
-from tglc.util.constants import TESS_CCD_SHAPE, get_sector_containing_orbit
-from tglc.util.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
+from tglc.utils.constants import TESS_CCD_SHAPE, get_sector_containing_orbit
+from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = getLogger(__name__)

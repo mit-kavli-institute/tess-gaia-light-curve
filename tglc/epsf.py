@@ -6,7 +6,7 @@ from typing import Optional
 from numba import jit
 import numpy as np
 
-from tglc.util._optional_deps import HAS_CUPY
+from tglc.utils._optional_deps import HAS_CUPY
 
 
 @jit

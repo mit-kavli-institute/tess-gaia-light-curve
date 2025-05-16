@@ -7,7 +7,7 @@ from astropy import units as u
 from astropy.time import Time
 import pytest
 
-from tglc.util.tess_ephemeris import get_tess_spacecraft_position
+from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
 
 @pytest.mark.parametrize(

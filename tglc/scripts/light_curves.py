@@ -14,7 +14,7 @@ import numpy as np
 
 from tglc.ffi import Source
 from tglc.light_curve import generate_light_curves
-from tglc.util.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
+from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = logging.getLogger()

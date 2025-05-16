@@ -22,9 +22,9 @@ from scipy import ndimage
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from tglc.util import data
-from tglc.util.constants import convert_gaia_mags_to_tmag
-from tglc.util.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
+from tglc.utils import data
+from tglc.utils.constants import convert_gaia_mags_to_tmag
+from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = logging.getLogger(__name__)

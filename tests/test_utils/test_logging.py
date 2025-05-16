@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tglc.util.logging import setup_logging
+from tglc.utils.logging import setup_logging
 
 
 TEST_LOG_LEVELS = [

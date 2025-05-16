@@ -8,7 +8,7 @@ from typing import Callable
 
 from tglc import __version__ as tglc_version
 from tglc.cli import parse_tglc_args
-from tglc.util.logging import setup_logging
+from tglc.utils.logging import setup_logging
 
 
 logger = logging.getLogger(__name__)
