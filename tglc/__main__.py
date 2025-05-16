@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def tglc_main():
     args = parse_tglc_args()
-    setup_logging(args.debug, args.logfile)
+    setup_logging(args.debug, args.logfile, args.enable_runtime_warnings)
     logger.info(f"TGLC version {tglc_version}")
     printable_args = "\n".join(
         f"{a}: {getattr(args, a)}" for a in dir(args) if not a.startswith("_")

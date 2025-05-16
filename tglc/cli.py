@@ -30,8 +30,8 @@ def ccd(arg: str) -> tuple[int, int]:
     try:
         cam, ccd = arg.split(",")
         cam, ccd = int(cam), int(ccd)
-    except:
-        raise ValueError(f"Invalid CCD specifier: '{arg}'. Should be 'cam,ccd'.")
+    except Exception as e:
+        raise ValueError(f"Invalid CCD specifier: '{arg}'. Should be 'cam,ccd'.") from e
     if cam not in range(1, 5):
         raise ValueError(f"Invalid camera: {cam}. Must be in [1, 2, 3, 4].")
     if ccd not in range(1, 5):
@@ -40,29 +40,39 @@ def ccd(arg: str) -> tuple[int, int]:
 
 
 command_base_parser = argparse.ArgumentParser(add_help=False)
-command_base_parser.add_argument(
-    "-n", "--nprocs", type=int, default=1, help="Number of processes to use"
-)
-command_base_parser.add_argument(
-    "-r", "--replace", action="store_true", help="Whether to overwrite existing data products"
-)
+command_base_parser.add_argument("-o", "--orbit", type=int, required=True, help="TESS orbit to run")
 command_base_parser.add_argument(
     "--ccd",
     type=ccd,
     nargs="+",
-    help="cam,ccd pairs to run the command on. For example, --ccd 2,4 specifies camera 2, CCD 4. "
+    help="cam,ccd pairs to run. For example, --ccd 2,4 specifies camera 2, CCD 4. "
     "Multiple arguments are allowed separated by spaces, like --ccd 2,4 3,2.",
 )
-command_base_parser.add_argument(
-    "--debug", action="store_true", help="Whether to output debug-level logs"
+
+_general_options = command_base_parser.add_argument_group("General Options")
+_general_options.add_argument(
+    "-n", "--nprocs", type=int, default=1, help="Number of processes to use"
 )
-command_base_parser.add_argument("-l", "--logfile", type=Path, help="File to write logs")
-command_base_parser.add_argument(
+_general_options.add_argument(
+    "-r", "--replace", action="store_true", help="Whether to overwrite existing data products"
+)
+_general_options.add_argument(
     "--tglc-data-dir",
     type=Path,
     default=TGLC_DATA_DIR_DEFAULT,
     help="Base directory for TGLC data. Default is first directory containing the working "
     'directory called "tglc-data", or the working directory if no "tglc-data" directory is found.',
+)
+
+_logging_options = command_base_parser.add_argument_group("Logging Options")
+_logging_options.add_argument(
+    "--debug", action="store_true", help="Output debug-level logs (default=info-level logs)"
+)
+_logging_options.add_argument("-l", "--logfile", type=Path, help="File to write logs")
+_logging_options.add_argument(
+    "--enable-runtime-warnings",
+    action="store_true",
+    help="Allow numpy runtime warnings (silenced by default)",
 )
 
 
@@ -84,9 +94,6 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     catalogs_parser.add_argument(
-        "-o", "--orbit", type=int, required=True, help="TESS orbit of observations to query"
-    )
-    catalogs_parser.add_argument(
         "--output-dir",
         type=Path,
         help="Output directory for cached catalog files",
@@ -102,9 +109,6 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     cutouts_parser.add_argument(
-        "-o", "--orbit", type=int, required=True, help="TESS orbit of observations."
-    )
-    cutouts_parser.add_argument(
         "-s", "--cutout-size", type=int, default=150, help="Cutout side length. Default=150."
     )
 
@@ -115,16 +119,13 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     epsfs_parser.add_argument(
-        "-o", "--orbit", type=int, required=True, help="TESS orbit of observations"
-    )
-    epsfs_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of the ePSF. Default=11."
+        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
     )
     epsfs_parser.add_argument(
         "--oversample",
         type=int,
         default=2,
-        help="Factor by which to oversample the ePSF compared to image pixels. Default=2",
+        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
     )
     epsfs_parser.add_argument(
         "--uncertainty-power",
@@ -143,12 +144,12 @@ def parse_tglc_args() -> argparse.Namespace:
     epsfs_parser.add_argument(
         "--no-sparse",
         action="store_true",
-        help="Do not use scipy sparse linear algebra methods to fit ePSFs",
+        help="Do not use sparse linear algebra methods to fit ePSFs",
     )
     epsfs_parser.add_argument(
         "--no-gpu",
         action="store_true",
-        help="Do not use GPUs to fit ePSFs (ignored if cupy is not installed)",
+        help="Do not use GPUs to fit ePSFs (ignored if cupy not installed or GPUs not available)",
     )
 
     lightcurves_parser = tglc_commands.add_parser(
@@ -158,16 +159,13 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     lightcurves_parser.add_argument(
-        "-o", "--orbit", type=int, required=True, help="Orbit of light curves"
-    )
-    lightcurves_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of the ePSF. Default=11."
+        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
     )
     lightcurves_parser.add_argument(
         "--oversample",
         type=int,
         default=2,
-        help="Factor by which to oversample the ePSF compared to image pixels. Default=2",
+        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
     )
     lightcurves_parser.add_argument(
         "--max-magnitude",

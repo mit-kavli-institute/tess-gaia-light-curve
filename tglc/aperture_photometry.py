@@ -108,7 +108,9 @@ def get_normalized_aperture_photometry(
 
     # Local background is the average amount of flux above the expected amount
     local_background = np.nanmedian(flux[quality_flags == 0]) - expected_aperture_flux
-    flux -= local_background
+    if not np.isnan(local_background):
+        # `local_background` is NaN if there are no good-flagged, non-NaN points
+        flux -= local_background
     flux[flux <= 0] = np.nan  # Prevent runtime warnings converting to magnitude
 
     table = QTable(

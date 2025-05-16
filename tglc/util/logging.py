@@ -6,9 +6,12 @@ correctly.
 
 import logging
 from pathlib import Path
+import warnings
 
 
-def setup_logging(debug: bool = False, logfile: Path | None = None):
+def setup_logging(
+    debug: bool = False, logfile: Path | None = None, allow_runtime_warnings: bool = False
+):
     """Set up logging with a reasonable set of defaults."""
     log_level = logging.DEBUG if debug else logging.INFO
 
@@ -36,4 +39,6 @@ def setup_logging(debug: bool = False, logfile: Path | None = None):
         numba_logger = logging.getLogger("numba")
         numba_logger.setLevel(logging.INFO)
 
+    if not allow_runtime_warnings:
+        warnings.simplefilter("ignore", category=RuntimeWarning)
     logging.captureWarnings(True)
