@@ -1,6 +1,7 @@
 """ePSF helper functions."""
 
 from math import ceil, floor
+from typing import Optional
 
 from numba import jit
 import numpy as np
@@ -32,8 +33,8 @@ def make_tglc_design_matrix(
     oversample_factor: int,
     star_positions: np.ndarray,
     star_flux_ratios: np.ndarray,
-    background_strap_mask: np.ndarray,
-    edge_compression_scale_factor: float,
+    background_strap_mask: Optional[np.ndarray] = None,
+    edge_compression_scale_factor: Optional[float] = None,
 ):
     """
     Construct the TGLC design matrix from equation (3) of Han & Brandt, 2023.
@@ -52,16 +53,20 @@ def make_tglc_design_matrix(
     star_flux_ratios : array
         Ratio of flux from each star to maximum flux from any star, where flux is calculated using
         catalog brightness for each star. Shape (n,) and same order as `star_positions`.
-    background_strap_mask : array
-        Mask giving the background strap values for each pixel.
-    edge_compression_scale_factor : float
-        Scale factor used when forcing edges of ePSF to 0.
+    background_strap_mask : array | None
+        Mask giving the background strap values for each pixel. If omitted or set to `None`, no
+        columns for background modeling are added to the design matrix.
+    edge_compression_scale_factor : float | None
+        Scale factor used when forcing edges of ePSF to 0. This is only needed during fitting (not
+        forward modeling) and produces extra rows in the output. If omitted or set to `None`, no
+        extra rows are added to the design matrix.
 
     Returns
     -------
     design_matrix, regularization_extension_size : tuple[array, int]
         Design matrix and amount that observed vectors need to be extended by for regularization
-        during fitting.
+        during fitting. If `edge_compression_scale_factor` is `None`, then
+        `regularization_extension_size` will be `0`.
     """
     oversampled_psf_shape = (
         psf_shape_pixels[0] * oversample_factor + 1,
@@ -111,69 +116,78 @@ def make_tglc_design_matrix(
                         flux_ratio * np.abs(x_interpolation * y_interpolation)
                     )
 
-    # To calculate the linear gradients, we need the x and y coordinates of each pixel.
-    image_pixel_xs, image_pixel_ys = get_xy_coordinates_centered_at_zero(image_shape)
-    # background_contributions_to_pixels[iy, ix, b] is the contribution of background parameter b to
-    # pixel (ix, iy) in the image.
-    background_contribution_to_pixels = np.stack(
-        (
-            np.ones(image_shape),  # flat background level => same contribution to each point
-            image_pixel_ys,  # y component of linear gradient => use x coordinate of each point
-            image_pixel_xs,  # x component of linear gradient => use y coordinate of each point
-            background_strap_mask,  # flat contribution of background straps
-            background_strap_mask * image_pixel_ys,  # y-dependent contribution of background straps
-            background_strap_mask * image_pixel_xs,  # x-dependent contribution of background straps
-        ),
-        axis=-1,
-    )
-
-    # Construct the full design matrix by flattening image coordinates.
-    design_matrix = np.hstack(
-        (
-            epsf_contributions_to_pixels.reshape(
-                image_shape[0] * image_shape[1], oversampled_psf_shape[0] * oversampled_psf_shape[1]
-            ),
-            background_contribution_to_pixels.reshape(image_shape[0] * image_shape[1], -1),
-        )
-    )
-
-    # With the current set up, the flat background level could be partly fitted in the ePSF by
-    # having a constant background level:
-    # [[10 11 10]               [[0 1 0]
-    #  [11 13 11]   instead of   [1 3 1]
-    #  [10 11 10]]               [0 1 0]]
-    # In the case shown here, the background level should be 10 higher than whatever was fitted.
-    # To implement this, add rows to the design matrix that pick out a specific PSFpoint and give
-    # it a weight based on its distance to the center of the PSF. The vector of observations should
-    # have an appropriate number of zeros appended to it at fitting time.
-    psf_point_x, psf_point_y = get_xy_coordinates_centered_at_zero(oversampled_psf_shape)
-    psf_distance_from_center_weight = edge_compression_scale_factor * (
-        1
-        - np.exp(
-            -0.5
-            * ((psf_point_x / psf_shape_pixels[1]) ** 4 + (psf_point_y / psf_shape_pixels[0]) ** 4)
-        )
-    )
-    edge_compression_block = np.hstack(
-        (
-            np.diag(
-                psf_distance_from_center_weight.reshape(
-                    oversampled_psf_shape[0] * oversampled_psf_shape[1]
-                )
-            ),
-            np.zeros(
-                (
-                    oversampled_psf_shape[0] * oversampled_psf_shape[1],
-                    background_contribution_to_pixels.shape[-1],
-                )
-            ),
-        )
-    )
-
-    return (
-        np.vstack((design_matrix, edge_compression_block)),
+    design_matrix = epsf_contributions_to_pixels.reshape(
+        image_shape[0] * image_shape[1],
         oversampled_psf_shape[0] * oversampled_psf_shape[1],
     )
+    if background_strap_mask is not None:
+        # To calculate the linear gradients, we need the x and y coordinates of each pixel.
+        image_pixel_xs, image_pixel_ys = get_xy_coordinates_centered_at_zero(image_shape)
+        # background_contributions_to_pixels[iy, ix, b] is the contribution of background parameter b to
+        # pixel (ix, iy) in the image.
+        background_contribution_to_pixels = np.stack(
+            (
+                np.ones(image_shape),  # flat background level => same contribution to each point
+                image_pixel_ys,  # y component of linear gradient => use x coordinate of each point
+                image_pixel_xs,  # x component of linear gradient => use y coordinate of each point
+                background_strap_mask,  # flat contribution of background straps
+                background_strap_mask
+                * image_pixel_ys,  # y-dependent contribution of background straps
+                background_strap_mask
+                * image_pixel_xs,  # x-dependent contribution of background straps
+            ),
+            axis=-1,
+        )
+
+        # Construct the full design matrix by flattening image coordinates.
+        design_matrix = np.hstack(
+            (
+                design_matrix,
+                background_contribution_to_pixels.reshape(image_shape[0] * image_shape[1], -1),
+            )
+        )
+
+    regularization_extension_size = 0
+    if edge_compression_scale_factor is not None:
+        # With the current set up, the flat background level could be partly fitted in the ePSF by
+        # having a constant background level:
+        # [[10 11 10]               [[0 1 0]
+        #  [11 13 11]   instead of   [1 3 1]
+        #  [10 11 10]]               [0 1 0]]
+        # In the case shown here, the background level should be 10 higher than whatever was fitted.
+        # To implement this, add rows to the design matrix that pick out a specific PSFpoint and give
+        # it a weight based on its distance to the center of the PSF. The vector of observations should
+        # have an appropriate number of zeros appended to it at fitting time.
+        psf_point_x, psf_point_y = get_xy_coordinates_centered_at_zero(oversampled_psf_shape)
+        psf_distance_from_center_weight = edge_compression_scale_factor * (
+            1
+            - np.exp(
+                -0.5
+                * (
+                    (psf_point_x / psf_shape_pixels[1]) ** 4
+                    + (psf_point_y / psf_shape_pixels[0]) ** 4
+                )
+            )
+        )
+        edge_compression_block = np.hstack(
+            (
+                np.diag(
+                    psf_distance_from_center_weight.reshape(
+                        oversampled_psf_shape[0] * oversampled_psf_shape[1]
+                    )
+                ),
+                np.zeros(
+                    (
+                        oversampled_psf_shape[0] * oversampled_psf_shape[1],
+                        background_contribution_to_pixels.shape[-1],
+                    )
+                ),
+            )
+        )
+        design_matrix = np.vstack((design_matrix, edge_compression_block))
+        regularization_extension_size = oversampled_psf_shape[0] * oversampled_psf_shape[1]
+
+    return design_matrix, regularization_extension_size
 
 
 def fit_epsf(
@@ -211,7 +225,7 @@ def fit_epsf(
     epsf_parameters : array
         Array of best-fit ePSF parameters.
     """
-    flux_uncertainty_scale = 1 / (np.abs(flux)**flux_uncertainty_power)
+    flux_uncertainty_scale = 1 / (np.abs(flux) ** flux_uncertainty_power)
     flux_mask = base_flux_mask | (flux < 0.8 * np.nanmedian(flux))
 
     # Set up observed vector accounting for regularization
@@ -227,11 +241,12 @@ def fit_epsf(
         xp = cp.get_array_module(design_matrix, flux)
         if xp == cp:
             from cupyx.scipy import sparse
-            from cupyx.scipy.sparse import linalg
+            from cupyx.scipy.sparse import linalg  # noqa: F401
         else:
             from scipy import sparse
     else:
         from scipy import sparse
+
         xp = np
 
     if sparse.issparse(design_matrix):

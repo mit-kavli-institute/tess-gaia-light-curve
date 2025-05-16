@@ -177,7 +177,7 @@ def apply_barycentric_correction(
 
     star_projection = np.dot(spacecraft_position, star_vector)
     light_time = TimeDelta(
-        star_projection.to(u.lightsecond).value / (60 * 60 * 24),
+        star_projection.to(u.lightsecond).value * u.second,
         format="jd",
         scale="tdb",
     )

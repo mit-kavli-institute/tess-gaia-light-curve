@@ -109,6 +109,7 @@ def get_normalized_aperture_photometry(
     # Local background is the average amount of flux above the expected amount
     local_background = np.nanmedian(flux[quality_flags == 0]) - expected_aperture_flux
     flux -= local_background
+    flux[flux <= 0] = np.nan  # Prevent runtime warnings converting to magnitude
 
     table = QTable(
         {
@@ -119,7 +120,7 @@ def get_normalized_aperture_photometry(
             f"{column_name_prefix}centroid_x": centroids[:, 1],
             f"{column_name_prefix}centroid_y": centroids[:, 0],
         },
-        meta={"local_background": local_background},
+        meta={f"{column_name_prefix}local_background": local_background},
     )
 
     return table

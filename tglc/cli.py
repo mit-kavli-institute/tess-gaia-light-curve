@@ -160,6 +160,21 @@ def parse_tglc_args() -> argparse.Namespace:
     lightcurves_parser.add_argument(
         "-o", "--orbit", type=int, required=True, help="Orbit of light curves"
     )
+    lightcurves_parser.add_argument(
+        "--psf-size", type=int, default=11, help="Side length in pixels of the ePSF. Default=11."
+    )
+    lightcurves_parser.add_argument(
+        "--oversample",
+        type=int,
+        default=2,
+        help="Factor by which to oversample the ePSF compared to image pixels. Default=2",
+    )
+    lightcurves_parser.add_argument(
+        "--max-magnitude",
+        type=float,
+        default=13.5,
+        help="Maximum magnitude for which light curves should be extracted",
+    )
 
     args = tglc_parser.parse_args()
 

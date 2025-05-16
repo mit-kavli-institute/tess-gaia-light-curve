@@ -1,95 +1,95 @@
 """
 Script that creates light curves from FFI cutout objects.
 
-Assumes `make_cutouts.py` has already been run.
+Assumes `make_cutouts.py` and `make_epsfs.py` have already been run.
 """
 
 import argparse
-from functools import partial
-from glob import glob
-from itertools import product
-from multiprocessing import Pool
+import logging
 from pathlib import Path
 import pickle
 
-from astropy.io import fits
-import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
-from tglc.target_lightcurve import epsf
-
-
-def plot_epsf(sector=1, camccd="", local_directory=""):
-    fig = plt.figure(constrained_layout=False, figsize=(20, 9))
-    gs = fig.add_gridspec(14, 30)
-    gs.update(wspace=0.05, hspace=0.05)
-    for i in range(196):
-        cut_x = i // 14
-        cut_y = i % 14
-        psf = np.load(
-            f"{local_directory}epsf/{camccd}/epsf_{cut_x:02d}_{cut_y:02d}_sector_{sector}_{camccd}.npy"
-        )
-        cmap = "bone"
-        if np.isnan(psf).any():
-            cmap = "inferno"
-        ax = fig.add_subplot(gs[13 - cut_y, cut_x])
-        ax.imshow(psf[0, : 23**2].reshape(23, 23), cmap=cmap, origin="lower")
-        ax.set_yticklabels([])
-        ax.set_xticklabels([])
-        ax.tick_params(axis="x", bottom=False)
-        ax.tick_params(axis="y", left=False)
-    input_files = glob(f"{local_directory}ffi/*{camccd}-????-?_ffic.fits")
-    with fits.open(input_files[0], mode="denywrite") as hdul:
-        flux = hdul[1].data[0:2048, 44:2092]
-        ax_1 = fig.add_subplot(gs[:, 16:])
-        ax_1.imshow(np.log10(flux), origin="lower")
-    fig.text(0.25, 0.08, "CUT X (0-13)", ha="center")
-    fig.text(0.09, 0.5, "CUT Y (0-13)", va="center", rotation="vertical")
-    fig.suptitle(f"ePSF for sector:{sector} camera-ccd:{camccd}", x=0.5, y=0.92, size=20)
-    plt.savefig(
-        f"{local_directory}log/epsf_sector_{sector}_{camccd}.png", bbox_inches="tight", dpi=300
-    )
+from tglc.ffi import Source
+from tglc.light_curve import generate_light_curves
 
 
-def make_light_curves_for_cutout(camera: int, ccd: int, x: int, y: int, local_directory: Path):
-    with open(
-        local_directory / "source" / f"{camera}-{ccd}" / f"source_{x:02d}_{y:02d}.pkl", "rb"
-    ) as cutout_source:
-        source = pickle.load(cutout_source)
-    (local_directory / "epsf" / f"{camera}-{ccd}").mkdir(exist_ok=True)
-    epsf(
-        source,
-        psf_size=11,
-        factor=2,
-        cut_x=x,
-        cut_y=y,
-        sector=source.sector,
-        power=1.4,
-        local_directory=str(local_directory) + "/",
-        limit_mag=13.5,
-        save_aper=False,
-        no_progress_bar=True,
-    )
+logger = logging.getLogger()
+
+
+def read_source_and_epsf_and_save_light_curve(
+    source_epsf_files_and_lightcurve_directory: tuple[Path, Path, Path],
+    replace: bool,
+    psf_size: int,
+    oversample_factor: int,
+    max_magnitude: float,
+):
+    """
+    Read a pickled `Source` object and a numpy-saved ePSF, and extract and save light curves.
+
+    Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
+    unpacks I/O file paths from first argument.
+    """
+    source_file, epsf_file, light_curve_directory = source_epsf_files_and_lightcurve_directory
+    with source_file.open("rb") as source_pickle:
+        source: Source = pickle.load(source_pickle)
+    epsf = np.load(epsf_file)
+    for light_curve in generate_light_curves(
+        source, epsf, psf_size, oversample_factor, max_magnitude
+    ):
+        light_curve_file = light_curve_directory / f"{light_curve.meta['tic_id']}.h5"
+        if light_curve_file.is_file() and not replace:
+            logger.debug(
+                f"Light curve file {light_curve_file.resolve()} exists and will not be overwritten"
+            )
+        else:
+            light_curve.write_hdf5(light_curve_file)
 
 
 def make_light_curves_main(args: argparse.Namespace):
     orbit_directory: Path = args.tglc_data_dir / f"orbit{args.orbit:04d}"
-    (orbit_directory / "epsf").mkdir(exist_ok=True)
-    (orbit_directory / "lc").mkdir(exist_ok=True)
 
-    with Pool(args.nprocs) as pool:
-        make_light_curves_in_local_directory = partial(
-            make_light_curves_for_cutout, local_directory=orbit_directory
-        )
-        pool.starmap(
-            make_light_curves_in_local_directory,
-            product(
-                [cam for cam, ccd in args.ccd],
-                [ccd for cam, ccd in args.ccd],
-                range(14),
-                range(14),
-            ),
-        )
+    source_directory = orbit_directory / "source"
+    epsf_directoory = orbit_directory / "epsf"
+    light_curve_directory = orbit_directory / "lc"
+    light_curve_directory.mkdir(exist_ok=True)
+
+    for camera, ccd in args.ccd:
+        ccd_source_directory = source_directory / f"{camera}-{ccd}"
+        if not ccd_source_directory.is_dir():
+            logger.warning(f"Source directory for CCD {camera}-{ccd} not found, skipping")
+            continue
+        ccd_epsf_directory = epsf_directoory / f"{camera}-{ccd}"
+        if not ccd_epsf_directory.is_dir():
+            logger.warning(f"ePSF directory for CCD {camera}-{ccd} not found, skipping")
+            continue
+        ccd_light_curve_directory = light_curve_directory / f"{camera}-{ccd}"
+
+        ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
+        with logging_redirect_tqdm():
+            for source_file in tqdm(
+                ccd_source_files,
+                desc=f"Extracting light curves for cutouts in {camera}-{ccd}",
+                unit="cutout",
+            ):
+                epsf_file = (
+                    ccd_epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
+                )
+                if not epsf_file.is_file():
+                    logger.warning(
+                        f"ePSF for source file {source_file.resolve()} not found, skipping"
+                    )
+                    continue
+                read_source_and_epsf_and_save_light_curve(
+                    (source_file, epsf_file, ccd_light_curve_directory),
+                    args.replace,
+                    args.psf_size,
+                    args.oversample,
+                    args.max_magnitude,
+                )
 
 
 if __name__ == "__main__":

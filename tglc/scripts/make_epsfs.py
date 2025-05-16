@@ -190,11 +190,7 @@ def make_epsfs_main(args: argparse.Namespace):
         ccd_epsf_directory = epsf_directory / f"{camera}-{ccd}"
         ccd_epsf_directory.mkdir(exist_ok=True)
         ccd_epsf_files = [
-            ccd_epsf_directory
-            / (
-                f"epsf{source_file.stem.removeprefix('source')}"
-                f"_orbit_{args.orbit}_{camera}-{ccd}.npy"
-            )
+            ccd_epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
             for source_file in ccd_source_files
         ]
         if len(ccd_source_files) == 0:
