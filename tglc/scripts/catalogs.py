@@ -1,6 +1,5 @@
 """
-Script that creates cached versions of the TIC and Gaia databases with the entries relevant for the
-current orbit.
+Create cached versions of the TIC and Gaia databases with entries relevant to the current orbit.
 """
 
 import argparse
@@ -16,12 +15,10 @@ import numpy as np
 import pandas as pd
 import sqlalchemy as sa
 import tesswcs
-from tqdm import tqdm
-from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.databases import TIC, Gaia
 from tglc.util.constants import TESS_CCD_SHAPE, get_sector_containing_orbit
-from tglc.util.multiprocessing import pool_map_if_multiprocessing
+from tglc.util.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = getLogger(__name__)
@@ -194,7 +191,7 @@ def get_gaia_catalog_data(orbit: int, camera: int, ccd: int, nprocs: int = 1) ->
     return gaia_data
 
 
-def _make_tic_and_gaia_catalogs(
+def make_tic_and_gaia_catalogs(
     camera_ccd: tuple[int, int],
     orbit: int,
     tic_magnitude_limit: float,
@@ -241,17 +238,21 @@ def _make_tic_and_gaia_catalogs(
 
 
 def make_catalog_main(args: argparse.Namespace):
+    """
+    Create cached versions of the TIC and Gaia databases with entries relevant to the current orbit.
+    """
+    logger.info(f"Writing catalogs to {args.output_dir.resolve()}")
     args.output_dir.mkdir(exist_ok=True)
 
     make_tic_and_gaia_catalogs_for_camera_and_ccd = partial(
-        _make_tic_and_gaia_catalogs,
+        make_tic_and_gaia_catalogs,
         orbit=args.orbit,
         tic_magnitude_limit=args.maglim,
         output_directory=args.output_dir,
         nprocs=max(args.nprocs // 16, 1),  # Controls how many threads to use for queries
         replace=args.replace,
     )
-    make_catalogs_iterator = tqdm(
+    consume_iterator_with_progress_bar(
         pool_map_if_multiprocessing(
             make_tic_and_gaia_catalogs_for_camera_and_ccd,
             args.ccd,
@@ -262,10 +263,6 @@ def make_catalog_main(args: argparse.Namespace):
         unit="ccd",
         total=len(args.ccd),
     )
-    with logging_redirect_tqdm():
-        # Consume catalog iterator to execute _make_tic_and_gaia_catalogs
-        for _ in make_catalogs_iterator:
-            pass
 
 
 if __name__ == "__main__":

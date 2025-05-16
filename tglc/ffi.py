@@ -24,7 +24,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.util import data
 from tglc.util.constants import convert_gaia_mags_to_tmag
-from tglc.util.multiprocessing import pool_map_if_multiprocessing
+from tglc.util.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = logging.getLogger(__name__)
@@ -464,7 +464,6 @@ def ffi(
     replace : bool
         Replace existing files with new data. Default = False.
     """
-    base_directory = Path(base_directory)
     ffi_directory = base_directory / "ffi" / f"{camera}-{ccd}"
     ffi_files = list(ffi_directory.glob(f"*cam{camera}-ccd{ccd}*_img.fits"))
 
@@ -472,6 +471,12 @@ def ffi(
         logger.warning(f"No FFI files found for camera {camera} CCD {ccd}, skipping")
         return
     logger.info(f"Found {len(ffi_files)} FFI files for camera {camera} CCD {ccd}")
+
+    catalogs_directory = base_directory / "catalogs"
+    if not (catalogs_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv").is_file():
+        logger.warning(f"No Gaia catalog found for camera {camera} CCD {ccd}, skipping")
+    if not (catalogs_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv").is_file():
+        logger.warning(f"No TIC catalog found for camera {camera} CCD {ccd}, skipping")
 
     time = np.full_like(ffi_files, np.nan, dtype=np.float64)
     cadence = np.zeros_like(ffi_files, dtype=np.int64)
@@ -547,7 +552,6 @@ def ffi(
             wcs = WCS(hdulist[0].header)
             exposure = int(hdulist[0].header["EXPTIME"])
 
-    catalogs_directory = base_directory / "catalogs"
     logger.info(
         f"Reading catalogs for camera {camera} CCD {ccd} from {catalogs_directory.resolve()}"
     )
@@ -555,6 +559,7 @@ def ffi(
     tic_catalog = QTable.read(catalogs_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv")
 
     source_directory = base_directory / f"source/{camera}-{ccd}"
+    logger.info(f"Writing cutout source pickle files to {source_directory}")
     source_directory.mkdir(exist_ok=True)
     write_source_pickle_from_x_y = partial(
         _make_source_and_write_pickle,
@@ -580,7 +585,7 @@ def ffi(
     # There is a problem pickling astropy `MaskedQuantity` objects. There was some progress in
     # v7.0.1, and there appears to be an issue tracking the remaining problem:
     # https://github.com/astropy/astropy/issues/16352
-    source_writer_iterator = tqdm(
+    consume_iterator_with_progress_bar(
         pool_map_if_multiprocessing(
             write_source_pickle_from_x_y,
             product(range(14), repeat=2),
@@ -591,7 +596,3 @@ def ffi(
         unit="source",
         total=14 * 14,
     )
-    # Lazy iterator needs to be consumed
-    with logging_redirect_tqdm():
-        for _ in source_writer_iterator:
-            pass

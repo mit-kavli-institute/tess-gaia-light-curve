@@ -1,7 +1,7 @@
 """
-Script that creates light curves from FFI cutout objects.
+Extract light curves from FFI cutouts using best-fit ePSFs.
 
-Assumes `make_cutouts.py` and `make_epsfs.py` have already been run.
+Assumes `tglc cutouts` and `tglc epsfs` have already been run.
 """
 
 import argparse
@@ -11,12 +11,10 @@ from pathlib import Path
 import pickle
 
 import numpy as np
-from tqdm import tqdm
-from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.ffi import Source
 from tglc.light_curve import generate_light_curves
-from tglc.util.multiprocessing import pool_map_if_multiprocessing
+from tglc.util.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = logging.getLogger()
@@ -53,26 +51,31 @@ def read_source_and_epsf_and_save_light_curves(
 
 
 def make_light_curves_main(args: argparse.Namespace):
+    """
+    Extract light curves from FFI cutouts using best-fit ePSFs.
+
+    Assumes `tglc cutouts` and `tglc epsfs` have already been run.
+    """
     orbit_directory: Path = args.tglc_data_dir / f"orbit{args.orbit:04d}"
 
     source_directory = orbit_directory / "source"
+    if not source_directory.is_dir():
+        logger.error("Source directory not found, exiting")
+        return
     epsf_directoory = orbit_directory / "epsf"
+    if not epsf_directoory.is_dir():
+        logger.error("ePSF directory not found, exiting")
+        return
     light_curve_directory = orbit_directory / "lc"
     light_curve_directory.mkdir(exist_ok=True)
 
     for camera, ccd in args.ccd:
         ccd_source_directory = source_directory / f"{camera}-{ccd}"
-        if not ccd_source_directory.is_dir():
-            logger.warning(f"Source directory for CCD {camera}-{ccd} not found, skipping")
+        ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
+        if len(ccd_source_files) == 0:
+            logger.warning(f"No cutout source files found for camera {camera} CCD {ccd}, skipping")
             continue
         ccd_epsf_directory = epsf_directoory / f"{camera}-{ccd}"
-        if not ccd_epsf_directory.is_dir():
-            logger.warning(f"ePSF directory for CCD {camera}-{ccd} not found, skipping")
-            continue
-        ccd_light_curve_directory = light_curve_directory / f"{camera}-{ccd}"
-        ccd_light_curve_directory.mkdir(exist_ok=True)
-
-        ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
         ccd_source_and_epsf_files = []
         for source_file in ccd_source_files:
             epsf_file = ccd_epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
@@ -80,6 +83,13 @@ def make_light_curves_main(args: argparse.Namespace):
                 ccd_source_and_epsf_files.append((source_file, epsf_file))
             else:
                 logger.warning(f"ePSF for source file {source_file.resolve()} not found, skipping")
+        if len(ccd_source_and_epsf_files) == 0:
+            logger.warning(f"No ePSF files found for camera {camera} CCD {ccd}, skipping")
+            continue
+
+        ccd_light_curve_directory = light_curve_directory / f"{camera}-{ccd}"
+        ccd_light_curve_directory.mkdir(exist_ok=True)
+
         save_light_curves_with_argparse_args = partial(
             read_source_and_epsf_and_save_light_curves,
             light_curve_directory=ccd_light_curve_directory,
@@ -88,21 +98,17 @@ def make_light_curves_main(args: argparse.Namespace):
             oversample_factor=args.oversample,
             max_magnitude=args.max_magnitude,
         )
-        save_light_curves_iterator = pool_map_if_multiprocessing(
-            save_light_curves_with_argparse_args,
-            ccd_source_and_epsf_files,
-            nprocs=args.nprocs,
-            pool_map_method="imap_unordered",
+        consume_iterator_with_progress_bar(
+            pool_map_if_multiprocessing(
+                save_light_curves_with_argparse_args,
+                ccd_source_and_epsf_files,
+                nprocs=args.nprocs,
+                pool_map_method="imap_unordered",
+            ),
+            desc=f"Extracting light curves for {camera}-{ccd}",
+            unit="cutout",
+            total=len(ccd_source_and_epsf_files),
         )
-
-        with logging_redirect_tqdm():
-            for _ in tqdm(
-                save_light_curves_iterator,
-                desc=f"Extracting light curves for {camera}-{ccd}",
-                unit="cutout",
-                total=len(ccd_source_and_epsf_files),
-            ):
-                pass
 
 
 if __name__ == "__main__":
