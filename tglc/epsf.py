@@ -82,7 +82,7 @@ def make_tglc_design_matrix(
     pixels_in_epsf_y = (
         np.arange(psf_shape_pixels[0], dtype=np.int64) - (psf_shape_pixels[0] - 1) // 2
     )
-    for (x, y), flux_ratio in zip(star_positions, star_flux_ratios, strict=False):
+    for (x, y), flux_ratio in zip(star_positions, star_flux_ratios):  # noqa: B905 (for JIT)
         nearest_pixel_x, nearest_pixel_y = (round(x), round(y))
         for pixel_x in pixels_in_epsf_x + nearest_pixel_x:
             if pixel_x < 0 or pixel_x >= image_shape[1]:
