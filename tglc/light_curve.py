@@ -174,7 +174,7 @@ def generate_light_curves(
     pixel_top_bound = source.size - 2.5
 
     max_star_index = np.searchsorted(source.gaia["tess_mag"], max_magnitude, "right")
-    logger.info(f"Making light curves for {max_star_index} stars")
+    logger.debug(f"Making light curves for {max_star_index} stars")
     for i in range(0, max_star_index):
         # TODO extract this into a function and do multiprocessing
         if not (
