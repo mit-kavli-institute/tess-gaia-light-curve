@@ -176,7 +176,6 @@ def generate_light_curves(
     max_star_index = np.searchsorted(source.gaia["tess_mag"], max_magnitude, "right")
     logger.debug(f"Making light curves for {max_star_index} stars")
     for i in range(0, max_star_index):
-        # TODO extract this into a function and do multiprocessing
         if not (
             (pixel_left_bound <= nearest_pixel_x[i] <= pixel_right_bound)
             and (pixel_bottom_bound <= nearest_pixel_y[i] <= pixel_top_bound)
@@ -187,7 +186,7 @@ def generate_light_curves(
                 source.tic["gaia_designation"] == source.gaia["designation"][i]
             ][0]
         except IndexError:
-            logger.warning(
+            logger.debug(
                 f"No TIC ID found for {source.gaia['designation'][i]} in source object (tmag={source.gaia['tess_mag'][i]})."
             )
             continue

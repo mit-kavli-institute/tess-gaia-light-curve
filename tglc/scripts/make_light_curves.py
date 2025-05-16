@@ -5,6 +5,7 @@ Assumes `make_cutouts.py` and `make_epsfs.py` have already been run.
 """
 
 import argparse
+from functools import partial
 import logging
 from pathlib import Path
 import pickle
@@ -15,13 +16,15 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.ffi import Source
 from tglc.light_curve import generate_light_curves
+from tglc.util.multiprocessing import pool_map_if_multiprocessing
 
 
 logger = logging.getLogger()
 
 
-def read_source_and_epsf_and_save_light_curve(
-    source_epsf_files_and_lightcurve_directory: tuple[Path, Path, Path],
+def read_source_and_epsf_and_save_light_curves(
+    source_and_epsf_files: tuple[Path, Path],
+    light_curve_directory: Path,
     replace: bool,
     psf_size: int,
     oversample_factor: int,
@@ -33,7 +36,7 @@ def read_source_and_epsf_and_save_light_curve(
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
     unpacks I/O file paths from first argument.
     """
-    source_file, epsf_file, light_curve_directory = source_epsf_files_and_lightcurve_directory
+    source_file, epsf_file = source_and_epsf_files
     with source_file.open("rb") as source_pickle:
         source: Source = pickle.load(source_pickle)
     epsf = np.load(epsf_file)
@@ -70,27 +73,36 @@ def make_light_curves_main(args: argparse.Namespace):
         ccd_light_curve_directory.mkdir(exist_ok=True)
 
         ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
+        ccd_source_and_epsf_files = []
+        for source_file in ccd_source_files:
+            epsf_file = ccd_epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
+            if epsf_file.is_file():
+                ccd_source_and_epsf_files.append((source_file, epsf_file))
+            else:
+                logger.warning(f"ePSF for source file {source_file.resolve()} not found, skipping")
+        save_light_curves_with_argparse_args = partial(
+            read_source_and_epsf_and_save_light_curves,
+            light_curve_directory=ccd_light_curve_directory,
+            replace=args.replace,
+            psf_size=args.psf_size,
+            oversample_factor=args.oversample,
+            max_magnitude=args.max_magnitude,
+        )
+        save_light_curves_iterator = pool_map_if_multiprocessing(
+            save_light_curves_with_argparse_args,
+            ccd_source_and_epsf_files,
+            nprocs=args.nprocs,
+            pool_map_method="imap_unordered",
+        )
+
         with logging_redirect_tqdm():
-            for source_file in tqdm(
-                ccd_source_files,
-                desc=f"Extracting light curves for cutouts in {camera}-{ccd}",
+            for _ in tqdm(
+                save_light_curves_iterator,
+                desc=f"Extracting light curves for {camera}-{ccd}",
                 unit="cutout",
+                total=len(ccd_source_and_epsf_files),
             ):
-                epsf_file = (
-                    ccd_epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
-                )
-                if not epsf_file.is_file():
-                    logger.warning(
-                        f"ePSF for source file {source_file.resolve()} not found, skipping"
-                    )
-                    continue
-                read_source_and_epsf_and_save_light_curve(
-                    (source_file, epsf_file, ccd_light_curve_directory),
-                    args.replace,
-                    args.psf_size,
-                    args.oversample,
-                    args.max_magnitude,
-                )
+                pass
 
 
 if __name__ == "__main__":
