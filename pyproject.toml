@@ -1,11 +1,11 @@
 [project]
 name = "tglc"
 description = "TESS-Gaia Light Curves"
-version = "0.6.7"
 authors = [
   { name = "Te Han", email = "tehanhunter@gmail.com" },
   { name = "Jack Haviland", email = "haviland@mit.edu" },
 ]
+dynamic = ["version"]
 readme = "README.rst"
 urls = { HomePage = "https://github.com/TeHanHunter/TESS_Gaia_Light_Curve" }
 classifiers = [
@@ -13,32 +13,30 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
-requires-python = ">=3.8, <3.13"
+requires-python = ">=3.11, <3.13"
 dependencies = [
-  "astropy>=5.1",
-  "astroquery==0.4.7",
+  "astropy",
   "h5py",
   "matplotlib",
+  "numba",
   "numpy",
-  "oauthlib",
-  "requests",
+  "pandas",
   "scipy",
   "tesswcs",
-  "threadpoolctl",
   "tqdm",
-  "wheel",
-  "wotan",
-  "seaborn",
 ]
 scripts = { tglc = "tglc.__main__:tglc_main" }
 
-[build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
 [project.optional-dependencies]
 pdo = ["pyticdb @ git+ssh://git@github.com/mit-kavli-institute/pyticdb.git"]
+cupy = ["cupy"]
 dev = ["ruff", "pytest"]
+
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
 
 [tool.setuptools]
 include-package-data = true
