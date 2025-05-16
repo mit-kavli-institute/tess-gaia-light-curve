@@ -3,7 +3,6 @@
 import logging
 from math import ceil, floor
 from typing import Generator
-from time import time as get_time
 
 from astropy.coordinates import SkyCoord
 from astropy.stats import mad_std
@@ -12,7 +11,6 @@ from astropy.time import Time
 import astropy.units as u
 import bottleneck as bn
 import numpy as np
-from tqdm import tqdm
 
 from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
 from tglc.aperture_photometry import get_normalized_aperture_photometry
