@@ -122,7 +122,7 @@ def get_tic_catalog_data(
     with ThreadPoolExecutor(max_workers=nprocs) as executor:
         query_results = executor.map(
             run_tic_cone_query_with_mag_cutoffs,
-            zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg),
+            zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg, strict=True),
         )
     tic_data = Table.from_pandas(pd.concat(query_results).drop_duplicates("id"))
     tic_data["ra"].unit = u.deg
@@ -180,7 +180,7 @@ def get_gaia_catalog_data(orbit: int, camera: int, ccd: int, nprocs: int = 1) ->
     with ThreadPoolExecutor(max_workers=nprocs) as executor:
         query_results = executor.map(
             _run_gaia_cone_query,
-            zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg),
+            zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg, strict=True),
         )
     gaia_data = Table.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
     gaia_data["ra"].unit = u.deg

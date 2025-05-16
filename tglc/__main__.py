@@ -1,10 +1,10 @@
 """Main entrypoint for TGLC scripts."""
 
 import argparse
+from collections.abc import Callable
 import logging
 from multiprocessing import set_start_method
 import os
-from typing import Callable
 
 from tglc import __version__ as tglc_version
 from tglc.cli import parse_tglc_args

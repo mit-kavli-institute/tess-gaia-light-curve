@@ -189,9 +189,9 @@ class Gaia(Database, Q3C_Mixin):
 
     def crossmatch_to_tic_id(
         self,
-        tic_id: typing.Union[str, int],
+        tic_id: str | int,
         search_width: float,
-        tic_db: typing.Optional[str] = None,
+        tic_db: str | None = None,
         mag_tolerance: float = 0.1,
     ):
         """

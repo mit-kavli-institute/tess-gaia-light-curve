@@ -1,8 +1,7 @@
 """Utilities for mapping functions in TGLC."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from multiprocessing import Pool
-from typing import Callable
 
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm

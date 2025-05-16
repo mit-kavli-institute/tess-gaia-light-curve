@@ -227,7 +227,7 @@ def make_epsfs_main(args: argparse.Namespace):
         consume_iterator_with_progress_bar(
             pool_map_if_multiprocessing(
                 fit_and_save_epsf_with_argparse_args,
-                zip(ccd_source_files, ccd_epsf_files),
+                zip(ccd_source_files, ccd_epsf_files, strict=True),
                 nprocs=args.nprocs,
                 pool_map_method="imap_unordered",
             ),

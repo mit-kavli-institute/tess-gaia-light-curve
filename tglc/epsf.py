@@ -1,7 +1,6 @@
 """ePSF helper functions."""
 
 from math import ceil, floor
-from typing import Optional
 
 from numba import jit
 import numpy as np
@@ -33,8 +32,8 @@ def make_tglc_design_matrix(
     oversample_factor: int,
     star_positions: np.ndarray,
     star_flux_ratios: np.ndarray,
-    background_strap_mask: Optional[np.ndarray] = None,
-    edge_compression_scale_factor: Optional[float] = None,
+    background_strap_mask: np.ndarray | None = None,
+    edge_compression_scale_factor: float | None = None,
 ):
     """
     Construct the TGLC design matrix from equation (3) of Han & Brandt, 2023.
@@ -83,7 +82,7 @@ def make_tglc_design_matrix(
     pixels_in_epsf_y = (
         np.arange(psf_shape_pixels[0], dtype=np.int64) - (psf_shape_pixels[0] - 1) // 2
     )
-    for (x, y), flux_ratio in zip(star_positions, star_flux_ratios):
+    for (x, y), flux_ratio in zip(star_positions, star_flux_ratios, strict=False):
         nearest_pixel_x, nearest_pixel_y = (round(x), round(y))
         for pixel_x in pixels_in_epsf_x + nearest_pixel_x:
             if pixel_x < 0 or pixel_x >= image_shape[1]:

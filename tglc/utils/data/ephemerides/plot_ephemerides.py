@@ -4,14 +4,13 @@ transitions are smooth.
 """
 
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
 
 def plot_ephemerides(
-    ephemeris_directory: Optional[Path] = None, output_file: Optional[Path] = None
+    ephemeris_directory: Path | None = None, output_file: Path | None = None
 ) -> None:
     """
     Plot ephemerides from all files in given directory.
@@ -34,7 +33,7 @@ def plot_ephemerides(
 
     fig, (ax_x, ax_y, ax_z) = plt.subplots(3, 1, figsize=(9, 6), layout="constrained")
 
-    for ephemeris, path in zip(ephemerides, ephemeris_files):
+    for ephemeris, path in zip(ephemerides, ephemeris_files, strict=True):
         ax_x.plot(ephemeris["JDTDB"], ephemeris["X"], label=path.stem, alpha=0.8)
         ax_y.plot(ephemeris["JDTDB"], ephemeris["Y"], label=path.stem, alpha=0.8)
         ax_z.plot(ephemeris["JDTDB"], ephemeris["Z"], label=path.stem, alpha=0.8)
