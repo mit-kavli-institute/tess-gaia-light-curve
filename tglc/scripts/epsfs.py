@@ -144,25 +144,34 @@ def read_source_and_fit_and_save_epsf(
     with source_file.open("rb") as source_pickle:
         source: Source = pickle.load(source_pickle)
 
+    process_name = multiprocessing.current_process().name
+    pool_worker_name_match = re.match(r".*PoolWorker-(\d+)", process_name)
+    if pool_worker_name_match:
+        pool_worker_id = int(pool_worker_name_match[1])
+    else:
+        pool_worker_id = -1
+
     if use_gpu and HAS_CUPY:
         # Figure out which GPU to use, making sure they're evenly disributed
         import cupy
 
-        process_name = multiprocessing.current_process().name
-        pool_worker_name_match = re.match(r".*PoolWorker-(\d+)", process_name)
-        if pool_worker_name_match:
-            pool_worker_id = int(pool_worker_name_match[1])
+        if pool_worker_id > 0:
             cuda_device = (pool_worker_id - 1) % cupy.cuda.runtime.getDeviceCount()
-            logger.debug(f"Pool worker {process_name} using GPU {cuda_device}")
+            logger.debug(f"Pool worker {pool_worker_id} using GPU {cuda_device}")
         else:
-            logger.debug(f"Non-pool process {process_name} using GPU 0")
             cuda_device = 0
+            logger.debug(f"Non-pool process {process_name} using GPU 0")
         cuda_device_context = cupy.cuda.Device(cuda_device)
     else:
         from contextlib import nullcontext
 
         cuda_device = None
         cuda_device_context = nullcontext()
+
+        if pool_worker_id > 0:
+            logger.debug(f"Pool worker {pool_worker_id} using CPU")
+        else:
+            logger.debug(f"Non-pool process {process_name} using CPU")
 
     with cuda_device_context:
         epsf = fit_epsf_for_source(
