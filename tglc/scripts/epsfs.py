@@ -221,3 +221,9 @@ def make_epsfs_main(args: argparse.Namespace):
                 total=len(ccd_source_files),
             ):
                 pass
+
+
+if __name__ == "__main__":
+    raise RuntimeError(
+        "TGLC scripts can't be run directly: use the 'tglc' command or run 'python -m tglc'!"
+    )

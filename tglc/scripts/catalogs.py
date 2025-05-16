@@ -6,7 +6,6 @@ current orbit.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from itertools import product
 from logging import getLogger
 from pathlib import Path
 
@@ -270,4 +269,6 @@ def make_catalog_main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
-    make_catalog_main()
+    raise RuntimeError(
+        "TGLC scripts can't be run directly: use the 'tglc' command or run 'python -m tglc'!"
+    )

@@ -41,13 +41,13 @@ def tglc_main():
 
     main: Callable[[argparse.Namespace], None]
     if args.tglc_command == "catalogs":
-        from tglc.scripts.make_catalogs import make_catalog_main as main
+        from tglc.scripts.catalogs import make_catalog_main as main
     elif args.tglc_command == "cutouts":
-        from tglc.scripts.make_cutouts import make_cutouts_main as main
+        from tglc.scripts.cutouts import make_cutouts_main as main
     elif args.tglc_command == "epsfs":
-        from tglc.scripts.make_epsfs import make_epsfs_main as main
+        from tglc.scripts.epsfs import make_epsfs_main as main
     elif args.tglc_command == "lightcurves":
-        from tglc.scripts.make_light_curves import make_light_curves_main as main
+        from tglc.scripts.light_curves import make_light_curves_main as main
     else:
         raise ValueError(f"Unrecognized TGLC command: {args.tglc_command}")
 

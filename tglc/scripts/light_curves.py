@@ -106,4 +106,6 @@ def make_light_curves_main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
-    make_light_curves_main()
+    raise RuntimeError(
+        "TGLC scripts can't be run directly: use the 'tglc' command or run 'python -m tglc'!"
+    )
