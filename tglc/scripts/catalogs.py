@@ -50,7 +50,7 @@ def _get_camera_query_grid_centers(sector: int, camera: int, ccd: int) -> SkyCoo
 
 
 def _run_tic_cone_query(
-    radec: tuple[float, float],
+    ra_dec: tuple[float, float],
     radius: float = 5.0,
     magnitude_cutoff: float = 13.5,
     mdwarf_magnitude_cutoff: float | None = None,
@@ -59,9 +59,9 @@ def _run_tic_cone_query(
     Get results of TIC cone query centered at (ra, dec). All arguments have degree units.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
-    unpacks `ra` and `dec` from the first argument.
+    unpacks sky coordinates from first argument.
     """
-    ra, dec = radec
+    ra, dec = ra_dec
     if mdwarf_magnitude_cutoff is None:
         mdwarf_magnitude_cutoff = magnitude_cutoff
 
@@ -138,14 +138,14 @@ def get_tic_catalog_data(
     return tic_data
 
 
-def _run_gaia_cone_query(radec: tuple[float, float], radius: float = 5.0) -> pd.DataFrame:
+def _run_gaia_cone_query(ra_dec: tuple[float, float], radius: float = 5.0) -> pd.DataFrame:
     """
     Get results of Gaia cone query centered at (ra, dec). All arguments have degree units.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
-    unpacks `ra` and `dec` from the first argument.
+    unpacks sky coordinates from first argument.
     """
-    ra, dec = radec
+    ra, dec = ra_dec
     gaia = Gaia("gaia3")
     gaia_cone_query = gaia.query_by_loc(
         "gaia_source",
@@ -203,7 +203,7 @@ def make_tic_and_gaia_catalogs(
     Make TIC and Gaia catalog files for a camera/CCD in a sector.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
-    unpacks `camera` and `ccd` from the first argument.
+    unpacks camera and CCD from the first argument.
     """
     camera, ccd = camera_ccd
     tic_catalog_file: Path = output_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv"

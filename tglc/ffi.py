@@ -391,15 +391,15 @@ def _get_ffi_header_data_and_flux(
 
 
 def _make_source_and_write_pickle(
-    xy: tuple[int, int], output_directory: Path, replace: bool, **kwargs
+    x_y: tuple[int, int], output_directory: Path, replace: bool, **kwargs
 ):
     """
     Construct source object and write pickle file.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
-    unpacks `x` and `y` from the first argument.
+    unpacks coordinates from the first argument.
     """
-    x, y = xy
+    x, y = x_y
     output_file = output_directory / f"source_{x:02d}_{y:02d}.pkl"
     if not replace and (output_file.is_file() and output_file.stat().st_size > 0):
         logger.debug(
