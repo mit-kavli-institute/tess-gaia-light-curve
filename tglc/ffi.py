@@ -13,7 +13,6 @@ from astropy.time import Time
 import astropy.units as u
 from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS
-import bottleneck as bn
 from erfa.core import ErfaWarning
 import numba
 from numba import float32, jit, prange
@@ -528,13 +527,13 @@ def ffi(
     logger.info("Detecting bad pixels")
     bad_pixels = np.zeros(flux.shape[1:], dtype=bool)
     median_flux = _fast_nanmedian_axis0(flux)
-    bad_pixels[median_flux > 0.8 * bn.nanmax(median_flux)] = 1
-    bad_pixels[median_flux < 0.2 * bn.nanmedian(median_flux)] = 1
+    bad_pixels[median_flux > 0.8 * np.nanmax(median_flux)] = 1
+    bad_pixels[median_flux < 0.2 * np.nanmedian(median_flux)] = 1
     bad_pixels[np.isnan(median_flux)] = 1
 
     # Mark neighbors of bad pixels as also bad
     bad_y, bad_x = np.nonzero(bad_pixels)
-    for x, y in zip(bad_x, bad_y):
+    for x, y in zip(bad_x, bad_y, strict=False):
         bad_pixels[min(y + 1, 2047), x] = 1
         bad_pixels[max(y - 1, 0), x] = 1
         bad_pixels[y, min(x + 1, 2047)] = 1

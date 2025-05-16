@@ -1,15 +1,14 @@
 """Light curve extraction functionality."""
 
+from collections.abc import Generator
 import logging
 from math import ceil, floor
-from typing import Generator
 
 from astropy.coordinates import SkyCoord
 from astropy.stats import mad_std
 from astropy.table import QTable, hstack
 from astropy.time import Time
 import astropy.units as u
-import bottleneck as bn
 import numpy as np
 
 from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
@@ -156,7 +155,7 @@ def generate_light_curves(
     # Use the model's flat background level to determine points that should be ignored during
     # normalization in photometry
     flat_background = epsf[:, -6]
-    high_background_points = np.abs(flat_background - bn.nanmedian(flat_background)) >= mad_std(
+    high_background_points = np.abs(flat_background - np.nanmedian(flat_background)) >= mad_std(
         flat_background, ignore_nan=True
     )
 
@@ -219,7 +218,9 @@ def generate_light_curves(
             )
             for aperture_name, aperture_size in [("primary", 3), ("small", 1), ("large", 5)]
         ]
-        for aperture_name, table in zip(["primary", "small", "large"], aperture_photometry_data):
+        for aperture_name, table in zip(
+            ["primary", "small", "large"], aperture_photometry_data, strict=False
+        ):
             table[f"{aperture_name}_aperture_centroid_x"] += (
                 source.ccd_x + nearest_pixel_x[i] - star_x
             ) * u.pixel
@@ -230,7 +231,7 @@ def generate_light_curves(
         # Background light curve is the background level at the star's location
         background_light_curve = model_background[:, nearest_pixel_y[i], nearest_pixel_x[i]]
         background_quality_flags = np.abs(
-            background_light_curve - bn.nanmedian(background_light_curve)
+            background_light_curve - np.nanmedian(background_light_curve)
         ) >= 5 * mad_std(background_light_curve)
 
         target_ccd_x = star_positions[i][0] + source.ccd_x
