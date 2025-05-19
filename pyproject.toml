@@ -1,13 +1,13 @@
 [project]
 name = "tglc"
-description = "TESS-Gaia Light Curves"
+description = "TESS-Gaia Light Curve"
 authors = [
   { name = "Te Han", email = "tehanhunter@gmail.com" },
   { name = "Jack Haviland", email = "haviland@mit.edu" },
 ]
 dynamic = ["version"]
-readme = "README.rst"
-urls = { HomePage = "https://github.com/TeHanHunter/TESS_Gaia_Light_Curve" }
+readme = "README.md"
+urls = { homepage = "https://github.com/mit-kavli-institute/tess-gaia-light-curve", source = "https://github.com/mit-kavli-institute/tess-gaia-light-curve.git" }
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
