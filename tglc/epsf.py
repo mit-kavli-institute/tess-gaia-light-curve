@@ -109,10 +109,8 @@ def make_tglc_design_matrix(
                     (ceil(pixel_psf_x), floor(pixel_psf_y)),  # left up
                     (ceil(pixel_psf_x), ceil(pixel_psf_y)),  # right up
                 ]:
-                    x_interpolation = np.abs(pixel_psf_x - psf_x) or 1.0
-                    y_interpolation = np.abs(pixel_psf_y - psf_y) or 1.0
-                    epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] = (
-                        flux_ratio * np.abs(x_interpolation * y_interpolation)
+                    epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] += (
+                        flux_ratio * np.abs(pixel_psf_x - psf_x) * np.abs(pixel_psf_y - psf_y)
                     )
 
     design_matrix = epsf_contributions_to_pixels.reshape(
