@@ -197,8 +197,8 @@ def fit_epsf(
     """
     Find the best-fit ePSF parameters given a design matrix and observed flux values.
 
-    Uses `xp.linalg.lstsq` where `xp` is numpy or cupy by default. If `design_matrix` is sparse,
-    uses `lsmr` from `cupyx.scipy.sparse.linalg` or `scipy.sparse.linalg`.
+    Uses `xp.linalg.lstsq` where `xp` is numpy or cupy depending on the whether `design_matrix` is
+    on the CPU or GPU.
 
     Parameters
     ----------
@@ -236,24 +236,18 @@ def fit_epsf(
         import cupy as cp
 
         xp = cp.get_array_module(design_matrix, flux)
-        if xp == cp:
-            from cupyx.scipy import sparse
-            from cupyx.scipy.sparse import linalg  # noqa: F401
-        else:
-            from scipy import sparse
     else:
-        from scipy import sparse
-
         xp = np
 
-    if sparse.issparse(design_matrix):
-        result, _istop, _itn, _normr, _normar, _norma, _conda, _normx = sparse.linalg.lsmr(
-            (design_matrix.multiply(uncertainty_scale[:, np.newaxis])).tocsr()[~mask],
-            (observed_vector * uncertainty_scale)[~mask],
-        )
-    else:
-        result, _residuals, _rank, _s = xp.linalg.lstsq(
-            (design_matrix * uncertainty_scale[:, np.newaxis])[~mask],
-            (observed_vector * uncertainty_scale)[~mask],
-        )
-    return result
+    # Solve the normal equation instead of running a least squares fit directly. This is much faster
+    # because `alpha` is the size of the number of dimensions of the PSF model, which is much
+    # smaller than the number of dimensions of the observed flux. In the usual case, this amounts to
+    # solving a 535-dimesnional linear equation instead of running a least squares fit on a
+    # 23029x535 matrix.
+    # Using the normal equation is valid because A has *many* more rows than columns, so the chance
+    # that A has linearly dependent columns is negligible.
+    A = (design_matrix * uncertainty_scale[:, np.newaxis])[~mask]
+    b = (observed_vector * uncertainty_scale)[~mask]
+    alpha = A.T @ A
+    beta = A.T @ b
+    return xp.linalg.solve(alpha, beta)

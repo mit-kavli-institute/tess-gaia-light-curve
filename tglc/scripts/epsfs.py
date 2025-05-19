@@ -29,13 +29,10 @@ def fit_epsf_for_source(
     oversample_factor: int,
     edge_compression_factor: float,
     flux_uncertainty_power: float,
-    use_sparse: bool = True,
     use_gpu: bool = True,
 ):
     """
     Fit an ePSF for each cadence in a `Source` object.
-
-    Uses sparse linear algebra methods from `scipy` or `cupy`, as appropriate.
 
     Parameters
     ----------
@@ -48,9 +45,6 @@ def fit_epsf_for_source(
     flux_uncertainty_power : float
         Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes
         contributions from dimmer stars, 1 means all contributions are equal.
-    use_sparse : bool
-        If `True`, use sparse linear algebra methods for the ePSF parameter fit. Generally much more
-        efficient.
     use_gpu : bool
         If `True`, use `cupy` to run the ePSF parameter fit on the GPU. Requires `cupy` to be
         installed and at least one CUDA device to be available.
@@ -90,15 +84,6 @@ def fit_epsf_for_source(
     else:
         xp = np
 
-    if use_sparse:
-        if use_gpu and HAS_CUPY:
-            from cupyx.scipy import sparse
-        else:
-            from scipy import sparse
-        # The matrix will have some rows filtered out corresponding to bad pixels, so use a CSR
-        # sparse array
-        design_matrix = sparse.csr_matrix(design_matrix)
-
     e_psf = xp.zeros((flux.shape[0], design_matrix.shape[1]))
     # JIT-ing this loop using numba did not give much performance benefit. Maybe vectorizing would?
     for i in range(flux.shape[0]):
@@ -126,7 +111,6 @@ def read_source_and_fit_and_save_epsf(
     oversample_factor: int,
     edge_compression_factor: float,
     flux_uncertainty_power: float,
-    use_sparse: bool = True,
     use_gpu: bool = True,
 ):
     """
@@ -180,7 +164,6 @@ def read_source_and_fit_and_save_epsf(
             oversample_factor,
             edge_compression_factor,
             flux_uncertainty_power,
-            use_sparse=use_sparse,
             use_gpu=use_gpu,
         )
     np.save(epsf_output_file, epsf)
@@ -221,7 +204,6 @@ def make_epsfs_main(args: argparse.Namespace):
             oversample_factor=args.oversample,
             edge_compression_factor=args.edge_compression_factor,
             flux_uncertainty_power=args.uncertainty_power,
-            use_sparse=not args.no_sparse,
             use_gpu=not args.no_gpu,
         )
         consume_iterator_with_progress_bar(

@@ -142,11 +142,6 @@ def parse_tglc_args() -> argparse.Namespace:
         help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
     )
     epsfs_parser.add_argument(
-        "--no-sparse",
-        action="store_true",
-        help="Do not use sparse linear algebra methods to fit ePSFs",
-    )
-    epsfs_parser.add_argument(
         "--no-gpu",
         action="store_true",
         help="Do not use GPUs to fit ePSFs (ignored if cupy not installed or GPUs not available)",
