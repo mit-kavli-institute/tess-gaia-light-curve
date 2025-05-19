@@ -124,14 +124,13 @@ def make_tglc_design_matrix(
         # pixel (ix, iy) in the image.
         background_contribution_to_pixels = np.stack(
             (
-                np.ones(image_shape),  # flat background level => same contribution to each point
-                image_pixel_ys,  # y component of linear gradient => use x coordinate of each point
+                # This order is for historical compatibility
+                background_strap_mask * image_pixel_ys,  # y-dependent background straps
+                background_strap_mask * image_pixel_xs,  # x-dependent background straps
+                background_strap_mask,  # flat background straps
                 image_pixel_xs,  # x component of linear gradient => use y coordinate of each point
-                background_strap_mask,  # flat contribution of background straps
-                background_strap_mask
-                * image_pixel_ys,  # y-dependent contribution of background straps
-                background_strap_mask
-                * image_pixel_xs,  # x-dependent contribution of background straps
+                image_pixel_ys,  # y component of linear gradient => use x coordinate of each point
+                np.ones(image_shape),  # flat background level => same contribution to each point
             ),
             axis=-1,
         )
