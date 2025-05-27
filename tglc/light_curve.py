@@ -248,6 +248,15 @@ def generate_light_curves(
             sky_coord=sky_coord,
             tess_magnitude=source.gaia["tess_mag"][i],
             exposure_time=source.exposure * u.second,
+            primary_aperture_local_background=aperture_photometry_data[0].meta[
+                "primary_aperture_local_background"
+            ],
+            small_aperture_local_background=aperture_photometry_data[1].meta[
+                "small_aperture_local_background"
+            ],
+            large_aperture_local_background=aperture_photometry_data[2].meta[
+                "large_aperture_local_background"
+            ],
         )
 
         base_light_curve = QTable(

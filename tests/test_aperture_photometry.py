@@ -163,3 +163,4 @@ def test_get_normalized_aperture_photometry_with_colname_prefix():
     )
     for name in photometry_data.colnames:
         assert name.startswith("column_prefix")
+    assert "column_prefixlocal_background" in photometry_data.meta

@@ -48,6 +48,16 @@ class ApertureLightCurveMetadata:
     exposure_time: u.Quantity["time"]  # noqa: F821
     """"Exposure time of light curve data points."""
 
+    primary_aperture_local_background: u.Quantity[u.electron]
+    """Local background level in primary aperture, subtracted to bring flux median to expect level.
+    """
+
+    small_aperture_local_background: u.Quantity[u.electron]
+    """Local background level in small aperture, subtracted to bring flux median to expect level."""
+
+    large_aperture_local_background: u.Quantity[u.electron]
+    """Local background level in large aperture, subtracted to bring flux median to expect level."""
+
 
 class ApertureLightCurve(TimeSeries):
     """Aperture light curve."""
@@ -119,12 +129,13 @@ class ApertureLightCurve(TimeSeries):
             )
 
             photometry_group = lc_group.create_group("AperturePhotometry")
-            photometry_group.attrs["bestap"] = "Primary"
-            photometry_group.attrs["naps"] = 3
             for aperture_name, aperture_size in [("Primary", 3), ("Small", 1), ("Large", 5)]:
-                aperture_group = photometry_group.create_group(f"TGLCAperture{aperture_name}")
-
-                aperture_group.attrs["side_length"] = aperture_size
+                aperture_group = photometry_group.create_group(f"{aperture_name}Aperture")
+                aperture_group.attrs["name"] = f"TGLCAperture{aperture_name}"
+                aperture_group.attrs["description"] = f"{aperture_size}x{aperture_size} square"
+                aperture_group.attrs["localbackground"] = self.meta[
+                    "small_aperture_local_background"
+                ]
 
                 aperture_data = self[f"{aperture_name.lower()}_aperture_magnitude"]
                 aperture_group.create_dataset("RawMagnitude", data=aperture_data, dtype=np.float64)
