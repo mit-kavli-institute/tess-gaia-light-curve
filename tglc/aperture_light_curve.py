@@ -94,18 +94,17 @@ class ApertureLightCurve(TimeSeries):
 
     def write_hdf5(self, output_file: Path):
         with h5py.File(output_file, "w") as file:
+            file.attrs["TIC ID"] = self.meta["tic_id"]
+            file.attrs["Orbit"] = self.meta["orbit"]
+            file.attrs["Sector"] = self.meta["sector"]
+            file.attrs["Camera"] = self.meta["camera"]
+            file.attrs["CCD"] = self.meta["ccd"]
+            file.attrs["RA"] = self.meta["sky_coord"].ra.deg
+            file.attrs["Dec"] = self.meta["sky_coord"].dec.deg
+            file.attrs["BJDoffset"] = TESSJD.epoch_val.to(u.day)
+            file.attrs["TessMag"] = self.meta["tess_magnitude"]
+
             lc_group = file.create_group("LightCurve")
-
-            lc_group.attrs["TIC ID"] = self.meta["tic_id"]
-            lc_group.attrs["Orbit"] = self.meta["orbit"]
-            lc_group.attrs["Sector"] = self.meta["sector"]
-            lc_group.attrs["Camera"] = self.meta["camera"]
-            lc_group.attrs["CCD"] = self.meta["ccd"]
-            lc_group.attrs["RA"] = self.meta["sky_coord"].ra.deg
-            lc_group.attrs["Dec"] = self.meta["sky_coord"].dec.deg
-            lc_group.attrs["BJDoffset"] = TESSJD.epoch_val.to(u.day)
-            lc_group.attrs["TessMag"] = self.meta["tess_magnitude"]
-
             lc_group.create_dataset("BJD", data=self.time.jd, dtype=np.float64)
             lc_group.create_dataset("Cadence", data=self["cadence"], dtype=np.int64)
             lc_group.create_dataset(
