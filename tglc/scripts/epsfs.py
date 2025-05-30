@@ -17,6 +17,7 @@ import numpy as np
 from tglc.epsf import fit_epsf, make_tglc_design_matrix
 from tglc.ffi import Source
 from tglc.utils._optional_deps import HAS_CUPY
+from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
@@ -175,25 +176,19 @@ def make_epsfs_main(args: argparse.Namespace):
 
     Assumes `tglc cutouts` has already been run.
     """
-    orbit_directory: Path = args.tglc_data_dir / f"orbit{args.orbit:04d}"
-    source_directory = orbit_directory / "source"
-    if not source_directory.is_dir():
-        logger.error("Source directory not found, exiting")
-        return
-    epsf_directory = orbit_directory / "epsf"
-    epsf_directory.mkdir(exist_ok=True)
+    manifest = Manifest(args.tglc_data_dir, orbit=args.orbit)
 
     for camera, ccd in args.ccd:
-        ccd_source_directory = source_directory / f"{camera}-{ccd}"
-        ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
+        manifest.camera = camera
+        manifest.ccd = ccd
+        ccd_source_files = list(manifest.source_directory.iterdir())
         if len(ccd_source_files) == 0:
             logger.warning(f"No cutout source files found for camera {camera} CCD {ccd}, skipping")
             continue
 
-        ccd_epsf_directory = epsf_directory / f"{camera}-{ccd}"
-        ccd_epsf_directory.mkdir(exist_ok=True)
+        manifest.epsf_directory.mkdir(exist_ok=True)
         ccd_epsf_files = [
-            ccd_epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
+            manifest.epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
             for source_file in ccd_source_files
         ]
 

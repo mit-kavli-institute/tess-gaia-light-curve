@@ -6,7 +6,6 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from logging import getLogger
-from pathlib import Path
 
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
@@ -18,6 +17,7 @@ import tesswcs
 
 from tglc.databases import TIC, Gaia
 from tglc.utils.constants import TESS_CCD_SHAPE, get_sector_containing_orbit
+from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
@@ -194,8 +194,8 @@ def get_gaia_catalog_data(orbit: int, camera: int, ccd: int, nprocs: int = 1) ->
 def make_tic_and_gaia_catalogs(
     camera_ccd: tuple[int, int],
     orbit: int,
+    manifest: Manifest,
     tic_magnitude_limit: float,
-    output_directory: Path,
     nprocs: int = 1,
     replace: bool = False,
 ):
@@ -206,34 +206,37 @@ def make_tic_and_gaia_catalogs(
     unpacks camera and CCD from the first argument.
     """
     camera, ccd = camera_ccd
-    tic_catalog_file: Path = output_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv"
-    if replace or not tic_catalog_file.is_file():
+    manifest.orbit = orbit
+    manifest.camera = camera
+    manifest.ccd = ccd
+    if replace or not manifest.tic_catalog_file.is_file():
         tic_results = get_tic_catalog_data(
             orbit, camera, ccd, magnitude_cutoff=tic_magnitude_limit, nprocs=nprocs
         )
         # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
         # header and then write the data to get an equivalent file.
-        tic_results[:0].write(tic_catalog_file, overwrite=replace)
-        with open(tic_catalog_file, "a") as tic_output:
+        tic_results[:0].write(manifest.tic_catalog_file, overwrite=replace)
+        with open(manifest.tic_catalog_file, "a") as tic_output:
             tic_results.write(
                 tic_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False
             )
     else:
-        logger.info(f"TIC catalog at {tic_catalog_file} already exists and will not be overwritten")
+        logger.info(
+            f"TIC catalog at {manifest.tic_catalog_file} already exists and will not be overwritten"
+        )
 
-    gaia_catalog_file: Path = output_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv"
-    if replace or not gaia_catalog_file.is_file():
+    if replace or not manifest.gaia_catalog_file.is_file():
         gaia_results = get_gaia_catalog_data(orbit, camera, ccd, nprocs=nprocs)
         # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
         # header and then write the data to get an equivalent file.
-        gaia_results[:0].write(gaia_catalog_file, overwrite=replace)
-        with open(gaia_catalog_file, "a") as gaia_output:
+        gaia_results[:0].write(manifest.gaia_catalog_file, overwrite=replace)
+        with open(manifest.gaia_catalog_file, "a") as gaia_output:
             gaia_results.write(
                 gaia_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False
             )
     else:
         logger.info(
-            f"Gaia catalog at {gaia_catalog_file} already exists and will not be overwritten"
+            f"Gaia catalog at {manifest.gaia_catalog_file} already exists and will not be overwritten"
         )
 
 
@@ -241,12 +244,14 @@ def make_catalog_main(args: argparse.Namespace):
     """
     Create cached versions of the TIC and Gaia databases with entries relevant to the current orbit.
     """
-    logger.info(f"Writing catalogs to {args.output_dir.resolve()}")
-    args.output_dir.mkdir(exist_ok=True)
+    manifest = Manifest(args.tglc_data_dir)
+    manifest.orbit = args.orbit
+    manifest.catalog_directory.mkdir(exist_ok=True)
 
     make_tic_and_gaia_catalogs_for_camera_and_ccd = partial(
         make_tic_and_gaia_catalogs,
         orbit=args.orbit,
+        manifest=manifest,
         tic_magnitude_limit=args.maglim,
         output_directory=args.output_dir,
         nprocs=max(args.nprocs // 16, 1),  # Controls how many threads to use for queries

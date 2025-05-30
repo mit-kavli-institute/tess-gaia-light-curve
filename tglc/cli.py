@@ -94,11 +94,6 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     catalogs_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Output directory for cached catalog files",
-    )
-    catalogs_parser.add_argument(
         "--maglim", type=float, default=13.5, help="Magnitude limit for TIC query"
     )
 
@@ -174,8 +169,5 @@ def parse_tglc_args() -> argparse.Namespace:
     # Custom post-parsing logic
     if args.ccd is None:
         args.ccd = [(camera, ccd) for camera in range(1, 5) for ccd in range(1, 5)]
-    if args.tglc_command == "catalogs":
-        if args.output_dir is None:
-            args.output_dir = args.tglc_data_dir / f"orbit{args.orbit:04d}" / "catalogs"
 
     return args

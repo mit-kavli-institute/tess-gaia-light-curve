@@ -22,7 +22,8 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.utils import data
-from tglc.utils.constants import convert_gaia_mags_to_tmag
+from tglc.utils.constants import convert_gaia_mags_to_tmag, get_sector_containing_orbit
+from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
@@ -390,7 +391,7 @@ def _get_ffi_header_data_and_flux(
 
 
 def _make_source_and_write_pickle(
-    x_y: tuple[int, int], output_directory: Path, replace: bool, **kwargs
+    x_y: tuple[int, int], manifest: Manifest, replace: bool, **kwargs
 ):
     """
     Construct source object and write pickle file.
@@ -399,8 +400,9 @@ def _make_source_and_write_pickle(
     unpacks coordinates from the first argument.
     """
     x, y = x_y
-    output_file = output_directory / f"source_{x:02d}_{y:02d}.pkl"
-    if not replace and (output_file.is_file() and output_file.stat().st_size > 0):
+    manifest.cutout_x = x
+    manifest.cutout_y = y
+    if not replace and (manifest.source_file.is_file() and manifest.source_file.stat().st_size > 0):
         logger.debug(
             f"Source file for camera {kwargs['camera']}, CCD {kwargs['ccd']}, {x}_{y} already exists, skipping"
         )
@@ -408,7 +410,7 @@ def _make_source_and_write_pickle(
     kwargs["x"] = x * (kwargs["size"] - 4)
     kwargs["y"] = y * (kwargs["size"] - 4)
     source = Source(**kwargs)
-    with open(output_file, "wb") as output:
+    with open(manifest.source_file, "wb") as output:
         pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)
 
 
@@ -429,11 +431,10 @@ def _fast_nanmedian_axis0(array):
 
 
 def ffi(
+    orbit: int,
     camera: int,
     ccd: int,
-    orbit: int,
-    sector: int,
-    base_directory: Path,
+    manifest: Manifest,
     cutout_size: int = 150,
     produce_mask: bool = False,
     nprocs: int = 1,
@@ -442,18 +443,18 @@ def ffi(
     """
     Produce `Source` object pickle file from calibrated FFI files.
 
-    Within `base_directory`, the `source/{camera}-{ccd}/` directory is created and populated. If
-    `produce_mask` is `True`, the `mask/` directory is created and populated instead.
+    The `source/` directory is created for the given orbit/camera/CCD. If `produce_mask` is `True`,
+    the a mask file is created instead.
 
     Parameters
     ----------
+    orbit : int
+        TESS orbit of the FFI observations.
     camera, ccd : int
         TESS camera and CCD of FFIs that should be used.
-    orbit, sector : int
-        TESS orbit and sector containing the orbit of the FFI observations.
-    base_directory : Path
-        Base path to contain data products. Should contain populated `catalogs/` and `ffi/`
-        subdirectories.
+    manifest : Manifest
+        Manifest object used to determine input/output file paths. The `orbit`, `camera`, and `ccd`
+        fields are populated using arguments.
     cutout_size : int
         Side length of cutouts. Large numbers recommended for better quality. Default = 150.
     produce_mask : bool
@@ -463,19 +464,33 @@ def ffi(
     replace : bool
         Replace existing files with new data. Default = False.
     """
-    ffi_directory = base_directory / "ffi" / f"{camera}-{ccd}"
-    ffi_files = list(ffi_directory.glob(f"*cam{camera}-ccd{ccd}*_img.fits"))
+    manifest.orbit = orbit
+    manifest.camera = camera
+    manifest.ccd = ccd
+    if not manifest.ffi_directory.is_dir():
+        logger.warning(
+            f"FFI directory for camera {camera} CCD {ccd} not found, skipping."
+            f" Expected path: {manifest.ffi_directory.resolve()}"
+        )
+        return
+    elif not manifest.tic_catalog_file.is_file():
+        logger.warning(
+            f"TIC catalog file for camera {camera} CCD {ccd} not found, skipping."
+            f" Expected path: {manifest.tic_catalog_file.resolve()}"
+        )
+        return
+    elif not manifest.gaia_catalog_file.is_file():
+        logger.warning(
+            f"TIC catalog file for camera {camera} CCD {ccd} not found, skipping."
+            f" Expected path: {manifest.gaia_catalog_file.resolve()}"
+        )
+        return
+    ffi_files = list(manifest.ffi_directory.iterdir())
 
     if len(ffi_files) == 0:
         logger.warning(f"No FFI files found for camera {camera} CCD {ccd}, skipping")
         return
     logger.info(f"Found {len(ffi_files)} FFI files for camera {camera} CCD {ccd}")
-
-    catalogs_directory = base_directory / "catalogs"
-    if not (catalogs_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv").is_file():
-        logger.warning(f"No Gaia catalog found for camera {camera} CCD {ccd}, skipping")
-    if not (catalogs_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv").is_file():
-        logger.warning(f"No TIC catalog found for camera {camera} CCD {ccd}, skipping")
 
     time = np.full_like(ffi_files, np.nan, dtype=np.float64)
     cadence = np.zeros_like(ffi_files, dtype=np.int64)
@@ -516,7 +531,7 @@ def ffi(
         median_flux = _fast_nanmedian_axis0(flux)
         mask = background_mask(im=median_flux)
         mask /= ndimage.median_filter(mask, size=51)
-        np.save(base_directory / f"mask/mask_sector{sector:04d}_cam{camera}_ccd{ccd}.npy", mask)
+        np.save(manifest.ccd_directory / f"mask_orbit{orbit:04d}_cam{camera}_ccd{ccd}.npy", mask)
         return
     logger.info("Loading background mask")
     mask_file = resources.files(data) / "median_mask.fits"
@@ -551,23 +566,19 @@ def ffi(
             wcs = WCS(hdulist[0].header)
             exposure = int(hdulist[0].header["EXPTIME"])
 
-    logger.info(
-        f"Reading catalogs for camera {camera} CCD {ccd} from {catalogs_directory.resolve()}"
-    )
-    gaia_catalog = QTable.read(catalogs_directory / f"Gaia_camera{camera}_ccd{ccd}.ecsv")
-    tic_catalog = QTable.read(catalogs_directory / f"TIC_camera{camera}_ccd{ccd}.ecsv")
+    gaia_catalog = QTable.read(manifest.gaia_catalog_file)
+    tic_catalog = QTable.read(manifest.tic_catalog_file)
 
-    source_directory = base_directory / f"source/{camera}-{ccd}"
-    logger.info(f"Writing cutout source pickle files to {source_directory}")
-    source_directory.mkdir(exist_ok=True)
+    logger.info(f"Writing cutout source pickle files to {manifest.source_directory.resolve()}")
+    manifest.source_directory.mkdir(exist_ok=True)
     write_source_pickle_from_x_y = partial(
         _make_source_and_write_pickle,
-        output_directory=source_directory,
+        manifest=manifest,
         replace=replace,
         flux=flux,
         mask=mask,
         orbit=orbit,
-        sector=sector,
+        sector=get_sector_containing_orbit(orbit),
         time=time,
         size=cutout_size,
         quality=quality,

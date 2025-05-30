@@ -14,6 +14,7 @@ import numpy as np
 
 from tglc.ffi import Source
 from tglc.light_curve import generate_light_curves
+from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
@@ -22,7 +23,7 @@ logger = logging.getLogger()
 
 def read_source_and_epsf_and_save_light_curves(
     source_and_epsf_files: tuple[Path, Path],
-    light_curve_directory: Path,
+    manifest: Manifest,
     replace: bool,
     psf_size: int,
     oversample_factor: int,
@@ -41,13 +42,14 @@ def read_source_and_epsf_and_save_light_curves(
     for light_curve in generate_light_curves(
         source, epsf, psf_size, oversample_factor, max_magnitude
     ):
-        light_curve_file = light_curve_directory / f"{light_curve.meta['tic_id']}.h5"
-        if light_curve_file.is_file() and not replace:
-            logger.debug(
-                f"Light curve file {light_curve_file.resolve()} exists and will not be overwritten"
-            )
+        manifest.tic_id = light_curve.meta["tic_id"]
+        if replace or not manifest.light_curve_file.is_file():
+            light_curve.write_hdf5(manifest.light_curve_file)
         else:
-            light_curve.write_hdf5(light_curve_file)
+            logger.debug(
+                f"Light curve file {manifest.light_curve_file.resolve()} exists and will not be"
+                " overwritten"
+            )
 
 
 def make_light_curves_main(args: argparse.Namespace):
@@ -56,29 +58,21 @@ def make_light_curves_main(args: argparse.Namespace):
 
     Assumes `tglc cutouts` and `tglc epsfs` have already been run.
     """
-    orbit_directory: Path = args.tglc_data_dir / f"orbit{args.orbit:04d}"
-
-    source_directory = orbit_directory / "source"
-    if not source_directory.is_dir():
-        logger.error("Source directory not found, exiting")
-        return
-    epsf_directoory = orbit_directory / "epsf"
-    if not epsf_directoory.is_dir():
-        logger.error("ePSF directory not found, exiting")
-        return
-    light_curve_directory = orbit_directory / "lc"
-    light_curve_directory.mkdir(exist_ok=True)
+    manifest = Manifest(args.tglc_data_dir, orbit=args.orbit)
 
     for camera, ccd in args.ccd:
-        ccd_source_directory = source_directory / f"{camera}-{ccd}"
-        ccd_source_files = list(ccd_source_directory.glob("source_*_*.pkl"))
+        manifest.camera = camera
+        manifest.ccd = ccd
+        ccd_source_files = list(manifest.source_directory.iterdir())
         if len(ccd_source_files) == 0:
             logger.warning(f"No cutout source files found for camera {camera} CCD {ccd}, skipping")
             continue
-        ccd_epsf_directory = epsf_directoory / f"{camera}-{ccd}"
+
         ccd_source_and_epsf_files = []
         for source_file in ccd_source_files:
-            epsf_file = ccd_epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
+            epsf_file = (
+                manifest.epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
+            )
             if epsf_file.is_file():
                 ccd_source_and_epsf_files.append((source_file, epsf_file))
             else:
@@ -87,12 +81,11 @@ def make_light_curves_main(args: argparse.Namespace):
             logger.warning(f"No ePSF files found for camera {camera} CCD {ccd}, skipping")
             continue
 
-        ccd_light_curve_directory = light_curve_directory / f"{camera}-{ccd}"
-        ccd_light_curve_directory.mkdir(exist_ok=True)
+        manifest.light_curve_directory.mkdir(exist_ok=True)
 
         save_light_curves_with_argparse_args = partial(
             read_source_and_epsf_and_save_light_curves,
-            light_curve_directory=ccd_light_curve_directory,
+            manifest=manifest,
             replace=args.replace,
             psf_size=args.psf_size,
             oversample_factor=args.oversample,
