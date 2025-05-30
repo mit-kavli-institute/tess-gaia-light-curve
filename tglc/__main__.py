@@ -9,6 +9,7 @@ import os
 from tglc import __version__ as tglc_version
 from tglc.cli import parse_tglc_args
 from tglc.utils.logging import setup_logging
+from tglc.utils._optional_deps import HAS_CUPY
 
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,16 @@ def tglc_main():
         from tglc.scripts.epsfs import make_epsfs_main
 
         log_heading("Fitting ePSFs")
+        # Don't allow more GPU workers than CUDA devices
+        old_nprocs = args.nprocs
+        if HAS_CUPY:
+            import cupy
+            num_cuda_devices = cupy.cuda.runtime.getDeviceCount()
+            args.nprocs = min(args.nprocs, num_cuda_devices)
+
         make_epsfs_main(args)
+
+        args.nprocs = old_nprocs
 
         from tglc.scripts.light_curves import make_light_curves_main
 
