@@ -253,7 +253,6 @@ def make_catalog_main(args: argparse.Namespace):
         orbit=args.orbit,
         manifest=manifest,
         tic_magnitude_limit=args.max_magnitude,
-        output_directory=args.output_dir,
         nprocs=max(args.nprocs // 16, 1),  # Controls how many threads to use for queries
         replace=args.replace,
     )
