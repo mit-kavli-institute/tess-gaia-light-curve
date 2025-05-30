@@ -95,7 +95,7 @@ def parse_tglc_args() -> argparse.Namespace:
     )
     all_parser.add_argument(
         "--max-magnitude",
-        type="float",
+        type=float,
         default=13.5,
         help="Magnitude limit for TIC queries and light curve production",
     )
