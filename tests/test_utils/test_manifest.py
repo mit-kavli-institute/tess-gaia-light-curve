@@ -96,7 +96,7 @@ def test_Manifest_kitchen_sink_properties():
     assert "epsf_1_1.npy" in str(m.epsf_file)
 
     assert isinstance(m.light_curve_directory, Path)
-    assert "lc" in str(m.light_curve_directory)
+    assert "LC" in str(m.light_curve_directory)
 
     assert isinstance(m.light_curve_file, Path)
     assert "1.h5" in str(m.light_curve_file)

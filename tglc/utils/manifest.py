@@ -123,7 +123,7 @@ class Manifest:
     @property
     def light_curve_directory(self) -> Path:
         """Directory containing light curves."""
-        return self.ccd_directory / "lc"
+        return self.ccd_directory / "LC"
 
     @property
     def light_curve_file(self) -> Path:
