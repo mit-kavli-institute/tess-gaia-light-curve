@@ -48,6 +48,39 @@ def tglc_main():
         from tglc.scripts.epsfs import make_epsfs_main as main
     elif args.tglc_command == "lightcurves":
         from tglc.scripts.light_curves import make_light_curves_main as main
+    elif args.tglc_command == "all":
+
+        def log_heading(msg: str):
+            """
+            Prints a header message with a border like this:
+            ******************
+            * Header Message *
+            ******************
+            """
+            logger.info(f"\n{'*' * (len(msg) + 4)}\n* {msg} *\n{'*' * (len(msg) + 4)}\n")
+
+        log_heading("Running all TGLC scripts")
+
+        from tglc.scripts.catalogs import make_catalog_main
+
+        log_heading("Creating catalogs")
+        make_catalog_main(args)
+
+        from tglc.scripts.cutouts import make_cutouts_main
+
+        log_heading("Making FFI cutouts")
+        make_cutouts_main(args)
+
+        from tglc.scripts.epsfs import make_epsfs_main
+
+        log_heading("Fitting ePSFs")
+        make_epsfs_main(args)
+
+        from tglc.scripts.light_curves import make_light_curves_main
+
+        log_heading("Extracting light curves")
+        make_light_curves_main(args)
+
     else:
         raise ValueError(f"Unrecognized TGLC command: {args.tglc_command}")
 

@@ -87,6 +87,50 @@ def parse_tglc_args() -> argparse.Namespace:
         dest="tglc_command", required=True, help="TGLC script to run"
     )
 
+    all_parser = tglc_commands.add_parser(
+        "all",
+        description="Run all TGLC steps for an orbit.",
+        help="Run all TGLC steps for an orbit.",
+        parents=[command_base_parser],
+    )
+    all_parser.add_argument(
+        "--max-magnitude",
+        type="float",
+        default=13.5,
+        help="Magnitude limit for TIC queries and light curve production",
+    )
+    all_parser.add_argument(
+        "-s", "--cutout-size", type=int, default=150, help="Cutout side length. Default=150."
+    )
+    all_parser.add_argument(
+        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+    )
+    all_parser.add_argument(
+        "--oversample",
+        type=int,
+        default=2,
+        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+    )
+    all_parser.add_argument(
+        "--uncertainty-power",
+        type=float,
+        default=1.4,
+        help="Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes "
+        "contributions from dimmer stars, 1 means all contributions are equal. Default=1.4 "
+        "determined empirically.",
+    )
+    all_parser.add_argument(
+        "--edge-compression-factor",
+        type=float,
+        default=1e-4,
+        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+    )
+    all_parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Do not use GPUs to fit ePSFs (ignored if cupy not installed or GPUs not available)",
+    )
+
     catalogs_parser = tglc_commands.add_parser(
         "catalogs",
         description="Create cached TIC and Gaia catalogs with data for an orbit.",
@@ -94,7 +138,7 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     catalogs_parser.add_argument(
-        "--maglim", type=float, default=13.5, help="Magnitude limit for TIC query"
+        "--max-magnitude", type=float, default=13.5, help="Magnitude limit for TIC query"
     )
 
     cutouts_parser = tglc_commands.add_parser(
