@@ -58,7 +58,8 @@ def make_tglc_design_matrix(
     edge_compression_scale_factor : float | None
         Scale factor used when forcing edges of ePSF to 0. This is only needed during fitting (not
         forward modeling) and produces extra rows in the output. If omitted or set to `None`, no
-        extra rows are added to the design matrix.
+        extra rows are added to the design matrix. If included, `background_strap_mask` must also be
+        given.
 
     Returns
     -------
@@ -104,13 +105,22 @@ def make_tglc_design_matrix(
                 # x and y directions. We further weight the contribution in importance by the flux
                 # ratio of the current star.
                 for psf_x, psf_y in [
-                    (floor(pixel_psf_x), floor(pixel_psf_y)),  # left down
-                    (floor(pixel_psf_x), ceil(pixel_psf_y)),  # right down
-                    (ceil(pixel_psf_x), floor(pixel_psf_y)),  # left up
-                    (ceil(pixel_psf_x), ceil(pixel_psf_y)),  # right up
+                    (floor(pixel_psf_x), floor(pixel_psf_y)),
+                    (floor(pixel_psf_x), ceil(pixel_psf_y)),
+                    (ceil(pixel_psf_x), floor(pixel_psf_y)),
+                    (ceil(pixel_psf_x), ceil(pixel_psf_y)),
                 ]:
+                    # Naively, the interpolation weight is:
+                    #   np.abs(pixel_psf_x - psf_x) * np.abs(pixel_psf_y - psf_y)
+                    # If the pixel lies on a PSF pixel boundary, one of these terms will vanish. But
+                    # that actually means we are only interpolating between two pixel centers on a
+                    # line, instead of four on a square. Those points will get double counted
+                    # because ceil and floor will give the same result, so we use 0.5 as the weight
+                    # to correct that.
+                    x_interpolation_weight = np.abs(pixel_psf_x - psf_x) or 0.5
+                    y_interpolation_weight = np.abs(pixel_psf_y - psf_y) or 0.5
                     epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] += (
-                        flux_ratio * np.abs(pixel_psf_x - psf_x) * np.abs(pixel_psf_y - psf_y)
+                        flux_ratio * x_interpolation_weight * y_interpolation_weight
                     )
 
     design_matrix = epsf_contributions_to_pixels.reshape(
@@ -120,8 +130,8 @@ def make_tglc_design_matrix(
     if background_strap_mask is not None:
         # To calculate the linear gradients, we need the x and y coordinates of each pixel.
         image_pixel_xs, image_pixel_ys = get_xy_coordinates_centered_at_zero(image_shape)
-        # background_contributions_to_pixels[iy, ix, b] is the contribution of background parameter b to
-        # pixel (ix, iy) in the image.
+        # background_contributions_to_pixels[iy, ix, b] is the contribution of background parameter
+        # b to pixel (ix, iy) in the image.
         background_contribution_to_pixels = np.stack(
             (
                 # This order is for historical compatibility
@@ -238,15 +248,20 @@ def fit_epsf(
     else:
         xp = np
 
-    # Solve the normal equation instead of running a least squares fit directly. This is much faster
-    # because `alpha` is the size of the number of dimensions of the PSF model, which is much
-    # smaller than the number of dimensions of the observed flux. In the usual case, this amounts to
-    # solving a 535-dimesnional linear equation instead of running a least squares fit on a
-    # 23029x535 matrix.
-    # Using the normal equation is valid because A has *many* more rows than columns, so the chance
-    # that A has linearly dependent columns is negligible.
     A = (design_matrix * uncertainty_scale[:, np.newaxis])[~mask]
     b = (observed_vector * uncertainty_scale)[~mask]
-    alpha = A.T @ A
-    beta = A.T @ b
-    return xp.linalg.solve(alpha, beta)
+
+    try:
+        # Solve the normal equation instead of running a least squares fit directly. This is much
+        # faster because `alpha` is the size of the number of dimensions of the PSF model, which is
+        # much smaller than the number of dimensions of the observed flux. In the usual case, this
+        # amounts to solving a 535-dimesnional linear equation instead of running a least squares
+        # fit on a 23029x535 matrix.
+        # Using the normal equation is valid because A has *many* more rows than columns, so the
+        # chance that A has linearly dependent columns is negligible.
+        alpha = A.T @ A
+        beta = A.T @ b
+        return xp.linalg.solve(alpha, beta)
+    except xp.linalg.LinAlgError:
+        # Just in case - this is useful eg for testing
+        return xp.linalg.lstsq(A, b)[0]
