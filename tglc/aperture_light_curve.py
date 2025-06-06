@@ -133,7 +133,7 @@ class ApertureLightCurve(TimeSeries):
                 aperture_group.attrs["name"] = f"TGLCAperture{aperture_name}"
                 aperture_group.attrs["description"] = f"{aperture_size}x{aperture_size} square"
                 aperture_group.attrs["localbackground"] = self.meta[
-                    "small_aperture_local_background"
+                    f"{aperture_name.lower()}_aperture_local_background"
                 ]
 
                 aperture_data = self[f"{aperture_name.lower()}_aperture_magnitude"]
