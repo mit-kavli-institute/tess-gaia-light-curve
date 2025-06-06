@@ -263,7 +263,8 @@ def generate_light_curves(
             {
                 "time": time_btjd,
                 "cadence": source.cadence,
-                "quality_flag": background_quality_flags,
+                # Use 2 for background quality flags to avoid conflicting with QLP quality flags
+                "quality_flag": background_quality_flags.astype(int) * 2,
                 "background_flux": background_light_curve,
             }
         )
