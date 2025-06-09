@@ -5,7 +5,7 @@ TGLC organizes files in a particular way, and the `Manifest` class helps find th
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from tglc.utils.constants import get_sector_containing_orbit
+from tglc.utils.constants import get_orbits_in_sector, get_sector_containing_orbit
 
 
 @dataclass
@@ -95,9 +95,11 @@ class Manifest:
     def tica_ffi_file(self) -> Path:
         """TICA calibrated full frame image file."""
         sector = get_sector_containing_orbit(self.orbit)
+        # Assumes orbits in a sector are consecutive
+        orbit_within_sector = self.orbit - min(get_orbits_in_sector(sector))
         return (
             self.ffi_directory
-            / f"hlsp_tica_tess_ffi_s{sector:04d}-{self.cadence:08d}-{self.camera}-crm-ffi-ccd{self.ccd}.fits"
+            / f"hlsp_tica_tess_ffi_s{sector:04d}-o{orbit_within_sector}-{self.cadence:08d}-{self.camera}-crm-ffi-ccd{self.ccd}.fits"
         )
 
     @property

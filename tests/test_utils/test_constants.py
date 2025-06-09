@@ -15,6 +15,7 @@ from tglc.utils.constants import (
     convert_tess_flux_to_tess_magnitude,
     convert_tess_magnitude_to_tess_flux,
     get_exposure_time_from_sector,
+    get_orbits_in_sector,
     get_sector_containing_orbit,
 )
 
@@ -75,6 +76,26 @@ def test_get_sector_containing_orbit():
 def test_get_sector_containing_orbit_with_invalid_orbit(bad_orbit: int):
     with pytest.raises(ValueError):
         get_sector_containing_orbit(bad_orbit)
+
+
+def test_get_orbits_in_sector():
+    assert get_orbits_in_sector(1) == [9, 10]
+    assert get_orbits_in_sector(2) == [11, 12]
+    assert get_orbits_in_sector(95) == [197, 198]
+
+
+@pytest.mark.parametrize("bad_sector", [0, -1, 96, 150])
+def test_get_orbits_in_sector_with_invalid_sector(bad_sector: int):
+    with pytest.raises(ValueError):
+        get_orbits_in_sector(bad_sector)
+
+
+@pytest.mark.parametrize(["sector", "orbits"], [(1, [9, 10]), (2, [11, 12]), (95, [197, 198])])
+def test_orbits_sector_round_trip(sector: int, orbits: list[int]):
+    for orbit in get_orbits_in_sector(sector):
+        assert get_sector_containing_orbit(orbit) == sector
+    for orbit in orbits:
+        assert orbit in get_orbits_in_sector(get_sector_containing_orbit(orbit))
 
 
 def test_convert_gaia_mags_to_tmag_no_masks():

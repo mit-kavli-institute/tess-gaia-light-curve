@@ -80,6 +80,14 @@ def get_sector_containing_orbit(orbit: int) -> int:
         raise ValueError(f"Sector not known for orbit {orbit}")
 
 
+def get_orbits_in_sector(sector: int) -> list[int]:
+    """Get the TESS orbits in a TESS sector."""
+    if 1 <= sector <= 95:
+        return [sector * 2 + 7, sector * 2 + 8]
+    else:
+        raise ValueError(f"Orbits not known for sector {sector}")
+
+
 def convert_gaia_mags_to_tmag(
     G: npt.ArrayLike, Gbp: npt.ArrayLike, Grp: npt.ArrayLike
 ) -> np.ma.MaskedArray:
