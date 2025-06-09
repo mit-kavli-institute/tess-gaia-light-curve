@@ -485,7 +485,7 @@ def ffi(
             f" Expected path: {manifest.gaia_catalog_file.resolve()}"
         )
         return
-    ffi_files = list(manifest.ffi_directory.iterdir())
+    ffi_files = manifest.tica_ffi_file_pattern.glob()
 
     if len(ffi_files) == 0:
         logger.warning(f"No FFI files found for camera {camera} CCD {ccd}, skipping")

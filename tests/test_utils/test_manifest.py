@@ -80,8 +80,12 @@ def test_Manifest_kitchen_sink_properties():
     assert isinstance(m.ffi_directory, Path)
     assert "ffi" in str(m.ffi_directory)
 
+    assert m.tica_ffi_file_pattern == "hlsp_tica_tess_ffi_s0001-o1-*-cam1-ccd1_tess_v01_img.fits"
+
     assert isinstance(m.tica_ffi_file, Path)
-    assert "hlsp_tica_tess_ffi_s0001-00000001-1-crm-ffi-ccd1.fits" in str(m.tica_ffi_file)
+    assert "hlsp_tica_tess_ffi_s0001-o1-00000001-cam1-ccd1_tess_v01_img.fits" in str(
+        m.tica_ffi_file
+    )
 
     assert isinstance(m.source_directory, Path)
     assert "source" in str(m.source_directory)

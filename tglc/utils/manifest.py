@@ -92,14 +92,26 @@ class Manifest:
         return self.ccd_directory / "ffi"
 
     @property
+    def tica_ffi_file_pattern(self) -> Path:
+        """
+        Glob pattern for TICA FFIs from any cadence, but known orbit, camera, and CCD.
+
+        Meant to be used like `manifest.ffi_directory.glob(manifest.tica_ffi_file_pattern)`.
+        """
+        sector = get_sector_containing_orbit(self.orbit)
+        # Assumes orbits in a sector are consecutive
+        orbit_within_sector = self.orbit - min(get_orbits_in_sector(sector)) + 1
+        return f"hlsp_tica_tess_ffi_s{sector:04d}-o{orbit_within_sector}-*-cam{self.camera}-ccd{self.ccd}_tess_v01_img.fits"
+
+    @property
     def tica_ffi_file(self) -> Path:
         """TICA calibrated full frame image file."""
         sector = get_sector_containing_orbit(self.orbit)
         # Assumes orbits in a sector are consecutive
-        orbit_within_sector = self.orbit - min(get_orbits_in_sector(sector))
+        orbit_within_sector = self.orbit - min(get_orbits_in_sector(sector)) + 1
         return (
             self.ffi_directory
-            / f"hlsp_tica_tess_ffi_s{sector:04d}-o{orbit_within_sector}-{self.cadence:08d}-{self.camera}-crm-ffi-ccd{self.ccd}.fits"
+            / f"hlsp_tica_tess_ffi_s{sector:04d}-o{orbit_within_sector}-{self.cadence:08d}-cam{self.camera}-ccd{self.ccd}_tess_v01_img.fits"
         )
 
     @property
