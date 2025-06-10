@@ -201,12 +201,16 @@ def make_epsfs_main(args: argparse.Namespace):
             flux_uncertainty_power=args.uncertainty_power,
             use_gpu=not args.no_gpu,
         )
+        # For GPU multiprocessing, the "spawn" start method is necessary
+        # TODO logging from workers is ignored with the "spawn" method
+        mp_start_method = "spawn" if not args.no_gpu else None
         consume_iterator_with_progress_bar(
             pool_map_if_multiprocessing(
                 fit_and_save_epsf_with_argparse_args,
                 zip(ccd_source_files, ccd_epsf_files, strict=True),
                 nprocs=args.nprocs,
                 pool_map_method="imap_unordered",
+                mp_start_method=mp_start_method,
             ),
             desc=f"Fitting ePSFs for {camera}-{ccd}",
             unit="cutout",
