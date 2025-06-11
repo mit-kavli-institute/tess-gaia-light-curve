@@ -28,6 +28,7 @@ def read_source_and_epsf_and_save_light_curves(
     psf_size: int,
     oversample_factor: int,
     max_magnitude: float,
+    tic_ids: list[int] | None = None,
 ):
     """
     Read a pickled `Source` object and a numpy-saved ePSF, and extract and save light curves.
@@ -40,7 +41,7 @@ def read_source_and_epsf_and_save_light_curves(
         source: Source = pickle.load(source_pickle)
     epsf = np.load(epsf_file)
     for light_curve in generate_light_curves(
-        source, epsf, psf_size, oversample_factor, max_magnitude
+        source, epsf, psf_size, oversample_factor, max_magnitude, tic_ids
     ):
         manifest.tic_id = light_curve.meta["tic_id"]
         if replace or not manifest.light_curve_file.is_file():
@@ -83,6 +84,13 @@ def make_light_curves_main(args: argparse.Namespace):
 
         manifest.light_curve_directory.mkdir(exist_ok=True)
 
+        if args.tic is not None:
+            logger.info(
+                "Light curves for the ONLY the following TIC IDs will be produced: "
+                + ", ".join(map(str, args.tic))
+            )
+            return
+
         save_light_curves_with_argparse_args = partial(
             read_source_and_epsf_and_save_light_curves,
             manifest=manifest,
@@ -90,6 +98,7 @@ def make_light_curves_main(args: argparse.Namespace):
             psf_size=args.psf_size,
             oversample_factor=args.oversample,
             max_magnitude=args.max_magnitude,
+            tic_ids=args.tic,
         )
         consume_iterator_with_progress_bar(
             pool_map_if_multiprocessing(

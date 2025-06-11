@@ -193,6 +193,9 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     lightcurves_parser.add_argument(
+        "-t", "--tic", type=int, nargs="+", help="Produce light curves only for listed TIC IDs."
+    )
+    lightcurves_parser.add_argument(
         "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
     )
     lightcurves_parser.add_argument(

@@ -117,6 +117,7 @@ def generate_light_curves(
     psf_size: int,
     psf_oversample_factor: int,
     max_magnitude: float,
+    tic_ids: list[int] | None = None,
 ) -> Generator[ApertureLightCurve, None, None]:
     """
     Generator function that yields aperture light curves extracted from the source cutout.
@@ -134,6 +135,9 @@ def generate_light_curves(
         matrices.
     max_magnitude : float
         Maximum magnitude of target stars for which light curves should be extracted.
+    tic_ids : list[int] | None
+        Optional list of TIC IDs that should have light curves made. If specified, TIC IDs in the
+        list will have light curves made.
 
     Yields
     ------
@@ -188,6 +192,8 @@ def generate_light_curves(
             logger.debug(
                 f"No TIC ID found for {source.gaia['designation'][i]} in source object (tmag={source.gaia['tess_mag'][i]})."
             )
+            continue
+        if tic_ids is not None and tic_id not in tic_ids:
             continue
 
         light_curve_cutout, star_x, star_y, psf_portions = get_cutout_for_light_curve(
