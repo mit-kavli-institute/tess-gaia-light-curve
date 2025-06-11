@@ -89,7 +89,6 @@ def make_light_curves_main(args: argparse.Namespace):
                 "Light curves for the ONLY the following TIC IDs will be produced: "
                 + ", ".join(map(str, args.tic))
             )
-            return
 
         save_light_curves_with_argparse_args = partial(
             read_source_and_epsf_and_save_light_curves,
