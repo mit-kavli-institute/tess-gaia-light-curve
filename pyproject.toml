@@ -1,0 +1,71 @@
+[project]
+name = "tglc"
+description = "TESS-Gaia Light Curve"
+authors = [
+  { name = "Te Han", email = "tehanhunter@gmail.com" },
+  { name = "Jack Haviland", email = "haviland@mit.edu" },
+]
+dynamic = ["version"]
+readme = "README.md"
+urls = { homepage = "https://github.com/mit-kavli-institute/tess-gaia-light-curve", source = "https://github.com/mit-kavli-institute/tess-gaia-light-curve.git" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+requires-python = ">=3.11, <3.13"
+dependencies = [
+  "astropy",
+  "h5py",
+  "matplotlib",
+  "numba",
+  "numpy",
+  "pandas",
+  "scipy",
+  "tesswcs",
+  "tqdm",
+]
+scripts = { tglc = "tglc.__main__:tglc_main" }
+
+[project.optional-dependencies]
+pdo = ["pyticdb @ git+ssh://git@github.com/mit-kavli-institute/pyticdb.git"]
+cupy = ["cupy"]
+dev = ["ruff", "pytest"]
+
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tglc", "tglc.*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]
+log_cli_level = "INFO"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = [
+  "B",   # flake8-bugbear
+  "I",   # isort
+  "UP",  # pyupgrade
+  "NPY", # numpy-specific
+  "PD",  # pandas-specific
+]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+force-sort-within-sections = true
+combine-as-imports = true
