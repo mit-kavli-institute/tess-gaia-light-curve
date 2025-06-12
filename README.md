@@ -13,7 +13,7 @@ Refer to [Han & Brandt (2023)](https://iopscience.iop.org/article/10.3847/1538-3
 Install this version of TGLC via pip:
 
 ```shell
-pip install git+ssh://git@github.com:mit-kavli-institute/tess-gaia-light-curve.git
+pip install git+https://github.com/mit-kavli-institute/tess-gaia-light-curve.git
 ```
 
 This will create a `tglc` executable command in your environment. It has four subcommands, which can be listed with `tglc -h`. They correspond to the four steps that TGLC must do to create light curves: download catalogs, create FFI cutouts, fit ePSFs, and extract photometry. TGLC does not download FFI data; you are repsonsible for ensuring that data is available in the right location on your system.
