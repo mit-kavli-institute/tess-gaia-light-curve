@@ -116,7 +116,6 @@ def generate_light_curves(
     epsf: np.ndarray,
     psf_size: int,
     psf_oversample_factor: int,
-    max_magnitude: float,
     tic_ids: list[int] | None = None,
 ) -> Generator[ApertureLightCurve, None, None]:
     """
@@ -136,14 +135,22 @@ def generate_light_curves(
     max_magnitude : float
         Maximum magnitude of target stars for which light curves should be extracted.
     tic_ids : list[int] | None
-        Optional list of TIC IDs that should have light curves made. If specified, TIC IDs in the
-        list will have light curves made.
+        Optional list of TIC IDs that should have light curves made. If specified, all other targets
+        will be ignored. By default, all targets in the source TIC catalog have light curves made.
 
     Yields
     ------
     light_curve : ApertureLightCurve
         Aperture light curves extracted from the source cutout with the ePSF parameters given.
     """
+    tic_match_table = source.tic
+    if tic_ids is not None:
+        tic_match_table = tic_match_table[np.isin(tic_match_table["TIC"], tic_ids)]
+    if len(tic_match_table) == 0:
+        logger.debug("No targets found, skipping light curve generation")
+        return
+    logger.debug(f"Making light curves for {tic_match_table} targets")
+
     star_positions = np.array(
         [source.gaia[f"sector_{source.sector}_x"], source.gaia[f"sector_{source.sector}_y"]]
     ).T
@@ -176,24 +183,16 @@ def generate_light_curves(
     pixel_bottom_bound = 1.5
     pixel_top_bound = source.size - 2.5
 
-    max_star_index = np.searchsorted(source.gaia["tess_mag"], max_magnitude, "right")
-    logger.debug(f"Making light curves for {max_star_index} stars")
-    for i in range(0, max_star_index):
+    for tic_id, gaia_designation in tic_match_table:
+        try:
+            i = np.nonzero(source.gaia["designation"] == gaia_designation)[0]
+        except IndexError:
+            logger.debug(f"No Gaia catalog entry found for TIC {tic_id}/{gaia_designation}")
+
         if not (
             (pixel_left_bound <= nearest_pixel_x[i] <= pixel_right_bound)
             and (pixel_bottom_bound <= nearest_pixel_y[i] <= pixel_top_bound)
         ):
-            continue
-        try:
-            tic_id = source.tic["TIC"][
-                source.tic["gaia_designation"] == source.gaia["designation"][i]
-            ][0]
-        except IndexError:
-            logger.debug(
-                f"No TIC ID found for {source.gaia['designation'][i]} in source object (tmag={source.gaia['tess_mag'][i]})."
-            )
-            continue
-        if tic_ids is not None and tic_id not in tic_ids:
             continue
 
         light_curve_cutout, star_x, star_y, psf_portions = get_cutout_for_light_curve(

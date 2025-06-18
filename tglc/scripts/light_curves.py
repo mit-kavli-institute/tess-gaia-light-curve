@@ -27,7 +27,6 @@ def read_source_and_epsf_and_save_light_curves(
     replace: bool,
     psf_size: int,
     oversample_factor: int,
-    max_magnitude: float,
     tic_ids: list[int] | None = None,
 ):
     """
@@ -40,9 +39,7 @@ def read_source_and_epsf_and_save_light_curves(
     with source_file.open("rb") as source_pickle:
         source: Source = pickle.load(source_pickle)
     epsf = np.load(epsf_file)
-    for light_curve in generate_light_curves(
-        source, epsf, psf_size, oversample_factor, max_magnitude, tic_ids
-    ):
+    for light_curve in generate_light_curves(source, epsf, psf_size, oversample_factor, tic_ids):
         manifest.tic_id = light_curve.meta["tic_id"]
         if replace or not manifest.light_curve_file.is_file():
             light_curve.write_hdf5(manifest.light_curve_file)

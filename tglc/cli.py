@@ -138,7 +138,13 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     catalogs_parser.add_argument(
-        "--max-magnitude", type=float, default=13.5, help="Magnitude limit for TIC query"
+        "--max-magnitude", type=float, default=13.5, help="Main magnitude limit for TIC query"
+    )
+    catalogs_parser.add_argument(
+        "--mdwarf-magnitude",
+        type=float,
+        default=15.0,
+        help="Magnitude limit for M-dwarfs in TIC query",
     )
 
     cutouts_parser = tglc_commands.add_parser(
@@ -203,12 +209,6 @@ def parse_tglc_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Factor used to oversample the PSF compared to image pixels. Default=2.",
-    )
-    lightcurves_parser.add_argument(
-        "--max-magnitude",
-        type=float,
-        default=13.5,
-        help="Maximum magnitude for which light curves should be extracted",
     )
 
     args = tglc_parser.parse_args()

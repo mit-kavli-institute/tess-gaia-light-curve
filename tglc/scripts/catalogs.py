@@ -196,6 +196,7 @@ def make_tic_and_gaia_catalogs(
     orbit: int,
     manifest: Manifest,
     tic_magnitude_limit: float,
+    mdwarf_magnitude_limit: float,
     nprocs: int = 1,
     replace: bool = False,
 ):
@@ -211,7 +212,12 @@ def make_tic_and_gaia_catalogs(
     manifest.ccd = ccd
     if replace or not manifest.tic_catalog_file.is_file():
         tic_results = get_tic_catalog_data(
-            orbit, camera, ccd, magnitude_cutoff=tic_magnitude_limit, nprocs=nprocs
+            orbit,
+            camera,
+            ccd,
+            magnitude_cutoff=tic_magnitude_limit,
+            mdwarf_magnitude_cutoff=mdwarf_magnitude_limit,
+            nprocs=nprocs,
         )
         # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
         # header and then write the data to get an equivalent file.
@@ -253,6 +259,7 @@ def make_catalog_main(args: argparse.Namespace):
         orbit=args.orbit,
         manifest=manifest,
         tic_magnitude_limit=args.max_magnitude,
+        mdwarf_magnitude_limit=args.mdwarf_magnitude,
         nprocs=max(args.nprocs // 16, 1),  # Controls how many threads to use for queries
         replace=args.replace,
     )
