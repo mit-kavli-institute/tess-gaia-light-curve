@@ -105,7 +105,7 @@ class ApertureLightCurve(TimeSeries):
             file.attrs["TessMag"] = self.meta["tess_magnitude"]
 
             lc_group = file.create_group("LightCurve")
-            lc_group.create_dataset("BJD", data=self.time.jd, dtype=np.float64)
+            lc_group.create_dataset("BJD", data=self.time.tjd, dtype=np.float64)
             lc_group.create_dataset("Cadence", data=self["cadence"], dtype=np.int64)
             lc_group.create_dataset(
                 "X",
