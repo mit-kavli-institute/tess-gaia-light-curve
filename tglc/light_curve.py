@@ -185,9 +185,10 @@ def generate_light_curves(
 
     for tic_id, gaia_designation in tic_match_table:
         try:
-            i = np.nonzero(source.gaia["designation"] == gaia_designation)[0]
+            i = np.nonzero(source.gaia["designation"] == gaia_designation)[0][0]
         except IndexError:
             logger.debug(f"No Gaia catalog entry found for TIC {tic_id}/{gaia_designation}")
+            continue
 
         if not (
             (pixel_left_bound <= nearest_pixel_x[i] <= pixel_right_bound)
