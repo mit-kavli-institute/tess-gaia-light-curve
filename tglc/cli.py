@@ -97,7 +97,13 @@ def parse_tglc_args() -> argparse.Namespace:
         "--max-magnitude",
         type=float,
         default=13.5,
-        help="Magnitude limit for TIC queries and light curve production",
+        help="Main magnitude limit for TIC query",
+    )
+    all_parser.add_argument(
+        "--mdwarf-magnitude",
+        type=float,
+        default=15.0,
+        help="Magnitude limit for M-dwarfs in TIC query",
     )
     all_parser.add_argument(
         "-s", "--cutout-size", type=int, default=150, help="Cutout side length. Default=150."
