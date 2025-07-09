@@ -93,7 +93,6 @@ def make_light_curves_main(args: argparse.Namespace):
             replace=args.replace,
             psf_size=args.psf_size,
             oversample_factor=args.oversample,
-            max_magnitude=args.max_magnitude,
             tic_ids=args.tic,
         )
         consume_iterator_with_progress_bar(
