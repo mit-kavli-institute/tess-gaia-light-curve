@@ -222,5 +222,9 @@ def parse_tglc_args() -> argparse.Namespace:
     # Custom post-parsing logic
     if args.ccd is None:
         args.ccd = [(camera, ccd) for camera in range(1, 5) for ccd in range(1, 5)]
+    if args.tglc_command == "all":
+        # Specifying a small number of TIC IDs doesn't make sense for the "all" command, but the
+        # light curves script expects `args` to have the `tic` attribute.
+        args.tic = None
 
     return args
