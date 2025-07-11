@@ -1,7 +1,5 @@
 """Main entrypoint for TGLC scripts."""
 
-import argparse
-from collections.abc import Callable
 import logging
 from multiprocessing import set_start_method
 import os
@@ -38,15 +36,22 @@ def tglc_main():
         os.environ["NUMEXPR_NUM_THREADS"] = "1"
         os.environ["OMP_NUM_THREADS"] = "1"
 
-    main: Callable[[argparse.Namespace], None]
     if args.tglc_command == "catalogs":
-        from tglc.scripts.catalogs import make_catalog_main as main
+        from tglc.scripts.catalogs import make_catalog_main
+
+        make_catalog_main(args)
     elif args.tglc_command == "cutouts":
-        from tglc.scripts.cutouts import make_cutouts_main as main
+        from tglc.scripts.cutouts import make_cutouts_main
+
+        make_cutouts_main(args)
     elif args.tglc_command == "epsfs":
-        from tglc.scripts.epsfs import make_epsfs_main as main
+        from tglc.scripts.epsfs import make_epsfs_main
+
+        make_epsfs_main(args)
     elif args.tglc_command == "lightcurves":
-        from tglc.scripts.light_curves import make_light_curves_main as main
+        from tglc.scripts.light_curves import make_light_curves_main
+
+        make_light_curves_main(args)
     elif args.tglc_command == "all":
 
         def log_heading(msg: str):
@@ -94,8 +99,6 @@ def tglc_main():
 
     else:
         raise ValueError(f"Unrecognized TGLC command: {args.tglc_command}")
-
-    main(args)
 
 
 if __name__ == "__main__":
