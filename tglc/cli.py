@@ -152,6 +152,8 @@ def parse_tglc_args() -> argparse.Namespace:
         default=15.0,
         help="Magnitude limit for M-dwarfs in TIC query",
     )
+    catalogs_parser.add_argument("--tic-only", action="store_true", help="Make only TIC catalogs")
+    catalogs_parser.add_argument("--gaia-only", action="store_true", help="Make only Gaia catalogs")
 
     cutouts_parser = tglc_commands.add_parser(
         "cutouts",
@@ -223,6 +225,10 @@ def parse_tglc_args() -> argparse.Namespace:
     if args.ccd is None:
         args.ccd = [(camera, ccd) for camera in range(1, 5) for ccd in range(1, 5)]
     if args.tglc_command == "all":
+        # Making only TIC or only Gaia catalogs doesn't make sense for the "all" command, but the
+        # catalogs script expects `args` to have `tic_only` and `gaia_only` attributes.
+        args.tic_only = False
+        args.gaia_only = False
         # Specifying a small number of TIC IDs doesn't make sense for the "all" command, but the
         # light curves script expects `args` to have the `tic` attribute.
         args.tic = None

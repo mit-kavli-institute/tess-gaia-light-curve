@@ -199,6 +199,8 @@ def make_tic_and_gaia_catalogs(
     mdwarf_magnitude_limit: float,
     nprocs: int = 1,
     replace: bool = False,
+    tic_only: bool = False,
+    gaia_only: bool = False,
 ):
     """
     Make TIC and Gaia catalog files for a camera/CCD in a sector.
@@ -210,7 +212,10 @@ def make_tic_and_gaia_catalogs(
     manifest.orbit = orbit
     manifest.camera = camera
     manifest.ccd = ccd
-    if replace or not manifest.tic_catalog_file.is_file():
+
+    if gaia_only:
+        logger.debug(f"Skipping TIC catalog creation for camera {camera} CCD {ccd}")
+    elif replace or not manifest.tic_catalog_file.is_file():
         tic_results = get_tic_catalog_data(
             orbit,
             camera,
@@ -231,7 +236,9 @@ def make_tic_and_gaia_catalogs(
             f"TIC catalog at {manifest.tic_catalog_file} already exists and will not be overwritten"
         )
 
-    if replace or not manifest.gaia_catalog_file.is_file():
+    if tic_only:
+        logger.debug(f"Skipping Gaia catalog creation for camera {camera} CCD {ccd}")
+    elif replace or not manifest.gaia_catalog_file.is_file():
         gaia_results = get_gaia_catalog_data(orbit, camera, ccd, nprocs=nprocs)
         # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
         # header and then write the data to get an equivalent file.
@@ -262,6 +269,8 @@ def make_catalog_main(args: argparse.Namespace):
         mdwarf_magnitude_limit=args.mdwarf_magnitude,
         nprocs=max(args.nprocs // 16, 1),  # Controls how many threads to use for queries
         replace=args.replace,
+        tic_only=args.tic_only,
+        gaia_only=args.gaia_only,
     )
     consume_iterator_with_progress_bar(
         pool_map_if_multiprocessing(
