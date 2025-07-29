@@ -239,7 +239,7 @@ def fit_epsf(
     uncertainty_scale = np.hstack(
         (flux_uncertainty_scale.flatten(), np.ones(regularization_dimensions))
     )
-    mask = np.hstack((flux_mask.flatten(), np.zeros(regularization_dimensions, dtype=np.bool)))
+    mask = np.hstack((flux_mask.flatten(), np.zeros(regularization_dimensions, dtype=bool)))
 
     if HAS_CUPY:
         import cupy as cp
