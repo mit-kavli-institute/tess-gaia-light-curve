@@ -9,8 +9,6 @@ import warnings
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Column, MaskedColumn, QTable, Table, hstack
-from astropy.time import Time
-import astropy.units as u
 from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS
 from erfa.core import ErfaWarning
@@ -22,92 +20,12 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.utils import data
-from tglc.utils.constants import convert_gaia_mags_to_tmag, get_sector_containing_orbit
+from tglc.utils.constants import get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = logging.getLogger(__name__)
-
-
-def crossmatch_tic_to_gaia(
-    tic: QTable,
-    gaia: QTable,
-    match_tmag_tolerance: float = 0.1,
-    match_angular_distance_tolerance: u.deg.physical_type = 2.1 * u.arcsec,
-):
-    """
-    Crossmatch between TIC and Gaia sources.
-
-    See `SkyCoord.match_to_catalog_sky` for more information about how matches are identified.
-
-    Parameters
-    ----------
-    tic : QTable
-        TIC data for sources to be identifid in Gaia data. Should include at least the following
-        columns:
-            - `"ra"`
-            - `"dec"`
-            - `"pmra"`
-            - `"pmdec"`
-            - `"tmag"`
-    gaia : QTable
-        Gaia data to be searched against for TIC sources. Should include at least the following
-        columns:
-            - `"ra"`
-            - `"dec"`
-            - `"phot_g_mean_mag"`
-            - `"phot_bp_mean_mag"`
-            - `"phot_rp_mean_mag"`
-            - `"designation"`
-    tmag_tolerance : float
-        Tolerance for difference between Tmag from the TIC and converted Tmag based on Gaia data.
-        See `convert_gaia_mags_to_tmag` for more information about the conversion.
-        Default = 0.1
-    pix_dist_tolerance : u.Quantity
-        Tolerance for angular distance between matched sources.
-        Default = 2.1 arcsec = 0.1 TESS pixels
-
-    Returns
-    -------
-    gaia_designations : MaskedColumn
-        Column containing Gaia designations for sources in TIC data provided. Rows where no match
-        could successfully be made with the provided tolerances are masked.
-    """
-    if len(tic) == 0 or len(gaia) == 0:
-        return MaskedColumn([], name="gaia_designation", mask=[])
-
-    tic_coords = SkyCoord(
-        ra=tic["ra"],
-        dec=tic["dec"],
-        pm_ra_cosdec=tic["pmra"],
-        pm_dec=tic["pmdec"],
-        frame="icrs",
-        obstime=Time("J2000"),
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", ErfaWarning)
-        pm_adjusted_tic_coords = tic_coords.apply_space_motion(Time("J2016"))
-        gaia_coords = SkyCoord(gaia["ra"], gaia["dec"])
-        match_idx, match_dist_angle, _match_dist_3d = pm_adjusted_tic_coords.match_to_catalog_sky(
-            gaia_coords
-        )
-
-    close_matches = match_dist_angle <= match_angular_distance_tolerance
-
-    gaia_tmag = convert_gaia_mags_to_tmag(
-        gaia["phot_g_mean_mag"][match_idx],
-        gaia["phot_bp_mean_mag"][match_idx],
-        gaia["phot_rp_mean_mag"][match_idx],
-    )
-    tmag_difference = np.abs(gaia_tmag - tic["tmag"])
-    close_tmags = tmag_difference <= match_tmag_tolerance
-
-    successful_matches = close_matches & close_tmags
-
-    return MaskedColumn(
-        gaia["designation"][match_idx], name="gaia_designation", mask=~successful_matches
-    )
 
 
 # from Tim
@@ -237,9 +155,7 @@ class Source:
         # Cross match TIC and Gaia
         tic_match_table = Table()
         tic_match_table.add_column(catalogdata_tic["id"], name="TIC")
-        tic_match_table.add_column(
-            crossmatch_tic_to_gaia(catalogdata_tic, catalogdata), name="gaia_designation"
-        )
+        tic_match_table.add_column(catalogdata_tic["gaia3"], name="gaia3")
         self.tic = tic_match_table
 
         # TODO remove this at some point, but right now units aren't expected downstream
@@ -258,7 +174,6 @@ class Source:
         # Calendar Date/Time:	2014-12-08 12:00:00 388.5 days before J2016
 
         num_gaia = len(catalogdata)
-        tic_id = np.zeros(num_gaia)
         x_gaia = np.zeros(num_gaia)
         y_gaia = np.zeros(num_gaia)
         tess_mag = np.zeros(num_gaia)
@@ -277,12 +192,6 @@ class Source:
             )
             x_gaia[i] = pixel[0][0] - self.ccd_x
             y_gaia[i] = pixel[0][1] - self.ccd_y
-            try:
-                tic_id[i] = catalogdata_tic["ID"][
-                    np.where(catalogdata_tic["GAIA"] == designation.split()[2])[0][0]
-                ]
-            except:
-                tic_id[i] = np.nan
             if np.isnan(catalogdata["phot_g_mean_mag"][i]):
                 in_frame[i] = False
             elif catalogdata["phot_g_mean_mag"][i] >= 25:
