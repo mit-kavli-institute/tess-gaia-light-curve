@@ -183,11 +183,11 @@ def generate_light_curves(
     pixel_bottom_bound = 1.5
     pixel_top_bound = source.size - 2.5
 
-    for tic_id, gaia_designation in tic_match_table:
+    for tic_id, gaia3_id in tic_match_table:
         try:
-            i = np.nonzero(source.gaia["designation"] == gaia_designation)[0][0]
+            i = np.nonzero(source.gaia["designation"] == f"Gaia DR3 {gaia3_id}")[0][0]
         except IndexError:
-            logger.debug(f"No Gaia catalog entry found for TIC {tic_id}/{gaia_designation}")
+            logger.debug(f"No Gaia catalog entry found for TIC {tic_id}/Gaia DR3 {gaia3_id}")
             continue
 
         if not (

@@ -66,22 +66,37 @@ def _run_tic_cone_query(
         mdwarf_magnitude_cutoff = magnitude_cutoff
 
     tic = TIC("tic_82")
-    TICEntry = tic.table("ticentries")
-
+    tic_entries = tic.table("ticentries")
+    dr2_to_dr3 = tic.table("dr2_to_dr3")
     base_query = tic.select("ticentries", *(field.lower() for field in TIC_CATALOG_FIELDS))
-    magnitude_filter = TICEntry.c.tmag < magnitude_cutoff
+    magnitude_filter = tic_entries.c.tmag < magnitude_cutoff
     # M dwarfs: magnitude < 15, T_eff < 4,000K, radius < 0.8 solar radii
     mdwarf_filter = sa.and_(
-        TICEntry.c.tmag.between(magnitude_cutoff, mdwarf_magnitude_cutoff),
-        TICEntry.c.teff < 4_000,
-        TICEntry.c.rad < 0.8,
+        tic_entries.c.tmag.between(magnitude_cutoff, mdwarf_magnitude_cutoff),
+        tic_entries.c.teff < 4_000,
+        tic_entries.c.rad < 0.8,
     )
-
     tic_cone_query = base_query.where(tic.in_cone("ticentries", ra, dec, width=radius)).where(
         sa.or_(magnitude_filter, mdwarf_filter)
     )
+
     logger.debug(f"Querying TIC via Pyticdb for {radius:.2f}deg cone around {ra=:.2f}, {dec=:.2f}")
-    return tic.to_df(tic_cone_query)
+    tic_with_gaia_dr2 = tic.to_df(tic_cone_query)
+    non_null_gaia_dr2_source_ids = tic_with_gaia_dr2["gaia"].dropna().astype(int)
+
+    logger.debug(f"Querying Gaia DR2 to DR3 table for stars around {ra=:.2f}, {dec=:.2f}")
+    gaia_match_query = tic.select("dr2_to_dr3", "dr2_source_id", "dr3_source_id").where(
+        dr2_to_dr3.c.dr2_source_id.in_(non_null_gaia_dr2_source_ids)
+    )
+    gaia_match = tic.to_df(gaia_match_query)
+    gaia_match["dr2_source_id"] = gaia_match["dr2_source_id"].astype(str)
+    gaia_match["dr3_source_id"] = pd.array(gaia_match["dr3_source_id"]).astype("Int64")
+
+    return (
+        tic_with_gaia_dr2.merge(gaia_match, how="left", left_on="gaia", right_on="dr2_source_id")
+        .drop(columns=["gaia", "dr2_source_id"])
+        .rename(columns={"dr3_source_id": "gaia3"})
+    )
 
 
 def get_tic_catalog_data(
