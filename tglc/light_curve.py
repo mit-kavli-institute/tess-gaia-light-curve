@@ -103,12 +103,27 @@ def get_cutout_for_light_curve(
     )
     decontaminated_cutout_flux = cutout_flux - cutout_field_model
 
+    # Get the model images using only the PSF part of the model, not the background. This is the
+    # contribution of the field stars.
+    cutout_field_star_model = np.dot(
+        field_design_matrix_for_cutout[:, :points_in_oversampled_psf],
+        epsf[:, :points_in_oversampled_psf].T,
+    ).T.reshape(flux.shape[0], *cutout_shape)
+    # We only need the average flux
+    cutout_field_star_flux = np.nansum(cutout_field_star_model, axis=0)
+
     cutout_target_psf = np.dot(
         target_design_matrix_for_cutout, epsf[:, :points_in_oversampled_psf].T
     ).T.reshape(flux.shape[0], *cutout_shape)
     psf_portion_in_cutout = np.nansum(cutout_target_psf, axis=0) / np.nansum(cutout_target_psf)
 
-    return decontaminated_cutout_flux, target_x_in_cutout, target_y_in_cutout, psf_portion_in_cutout
+    return (
+        decontaminated_cutout_flux,
+        target_x_in_cutout,
+        target_y_in_cutout,
+        psf_portion_in_cutout,
+        cutout_field_star_flux,
+    )
 
 
 def generate_light_curves(
@@ -196,16 +211,18 @@ def generate_light_curves(
         ):
             continue
 
-        light_curve_cutout, star_x, star_y, psf_portions = get_cutout_for_light_curve(
-            source.flux,
-            epsf,
-            design_matrix,
-            star_positions[i][0],
-            star_positions[i][1],
-            source.gaia["tess_flux_ratio"].data[i],
-            (psf_size, psf_size),
-            psf_oversample_factor,
-            cutout_size=5,
+        light_curve_cutout, star_x, star_y, psf_portions, field_star_cutout = (
+            get_cutout_for_light_curve(
+                source.flux,
+                epsf,
+                design_matrix,
+                star_positions[i][0],
+                star_positions[i][1],
+                source.gaia["tess_flux_ratio"].data[i],
+                (psf_size, psf_size),
+                psf_oversample_factor,
+                cutout_size=5,
+            )
         )
 
         sky_coord = SkyCoord(source.gaia["ra"][i], source.gaia["dec"][i], unit="deg")
