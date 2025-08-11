@@ -28,9 +28,9 @@ dependencies = [
 scripts = { tglc = "tglc.__main__:tglc_main" }
 
 [project.optional-dependencies]
-pdo = ["pyticdb @ git+ssh://git@github.com/mit-kavli-institute/pyticdb.git"]
+pyticdb = ["pyticdb"]
 cupy = ["cupy"]
-dev = ["ruff", "pytest"]
+dev = ["ruff", "pooch", "pytest", "pytest-docker", "tglc[pyticdb]"]
 
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm>=8"]
@@ -69,3 +69,8 @@ extend-select = [
 lines-after-imports = 2
 force-sort-within-sections = true
 combine-as-imports = true
+
+[tool.uv]
+index = [
+  { name = "MIT-Kavli", url = "https://mit-kavli-institute.github.io/MIT-Kavli-PyPi/" },
+]

@@ -1,0 +1,2 @@
+CREATE EXTENSION IF NOT EXISTS q3c WITH SCHEMA public;
+COMMENT ON EXTENSION q3c IS 'q3c sky indexing plugin';

@@ -31,11 +31,21 @@ def ccd(arg: str) -> tuple[int, int]:
         cam, ccd = arg.split(",")
         cam, ccd = int(cam), int(ccd)
     except Exception as e:
-        raise ValueError(f"Invalid CCD specifier: '{arg}'. Should be 'cam,ccd'.") from e
+        raise ValueError(f"Invalid CCD specifier: {arg:r}. Should be 'cam,ccd'.") from e
     if cam not in range(1, 5):
         raise ValueError(f"Invalid camera: {cam}. Must be in [1, 2, 3, 4].")
     if ccd not in range(1, 5):
         raise ValueError(f"Invalid CCD: {ccd}. Must be in [1, 2, 3, 4].")
+    return cam, ccd
+
+
+def cutout(arg: str) -> tuple[int, int]:
+    """Parse "x,y" as passed to --cutout. Used as a type for argparse."""
+    try:
+        cam, ccd = arg.split(",")
+        cam, ccd = int(cam), int(ccd)
+    except Exception as e:
+        raise ValueError(f"Invalid CCD specifier: {arg:r}. Should be 'x,y'.") from e
     return cam, ccd
 
 
@@ -47,6 +57,14 @@ command_base_parser.add_argument(
     nargs="+",
     help="cam,ccd pairs to run. For example, --ccd 2,4 specifies camera 2, CCD 4. "
     "Multiple arguments are allowed separated by spaces, like --ccd 2,4 3,2.",
+)
+command_base_parser.add_argument(
+    "--cutout",
+    type=cutout,
+    nargs="+",
+    help="x,y pairs of cutouts to run. Coordinates are among all cutouts, so --cutout 0,0 specifies "
+    "the bottom left cutout and --cutout 13,13 specifies the top right cutout (with default size). "
+    "Multiple argumenst are allowed separated by spaces, like --cutout 1,1 1,2",
 )
 
 _general_options = command_base_parser.add_argument_group("General Options")
@@ -106,7 +124,17 @@ def parse_tglc_args() -> argparse.Namespace:
         help="Magnitude limit for M-dwarfs in TIC query",
     )
     all_parser.add_argument(
-        "-s", "--cutout-size", type=int, default=150, help="Cutout side length. Default=150."
+        "-s",
+        "--cutout-size",
+        type=int,
+        default=150,
+        help="Cutout side length (pixels). Default=150.",
+    )
+    all_parser.add_argument(
+        "--overlap",
+        type=int,
+        default=2,
+        help="Overlap between adjacent cutouts (pixels). Default=2.",
     )
     all_parser.add_argument(
         "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
@@ -162,7 +190,17 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     cutouts_parser.add_argument(
-        "-s", "--cutout-size", type=int, default=150, help="Cutout side length. Default=150."
+        "-s",
+        "--cutout-size",
+        type=int,
+        default=150,
+        help="Cutout side length (pixels). Default=150.",
+    )
+    cutouts_parser.add_argument(
+        "--overlap",
+        type=int,
+        default=2,
+        help="Overlap between adjacent cutouts (pixels). Default=2.",
     )
 
     epsfs_parser = tglc_commands.add_parser(

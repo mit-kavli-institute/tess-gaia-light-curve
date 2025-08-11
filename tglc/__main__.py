@@ -26,7 +26,13 @@ def tglc_main():
     # required using `multiprocessing.get_context` by parts of the package that need it. This is
     # done through `tglc.utils.mapping.pool_map_if_multiprocessing` by the ePSFs script, for
     # example.
-    set_start_method("fork")
+    # Update: this function is used in end-to-end tests and pytests seems to set the start method,
+    # so we try/catch the resulting RuntimeError and just continue if this fails, since it basically
+    # only affects logging.
+    try:
+        set_start_method("fork")
+    except RuntimeError:
+        pass
 
     if args.nprocs > 1:
         # Stop numpy & other math libraries from multithreading

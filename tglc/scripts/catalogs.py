@@ -81,14 +81,25 @@ def _run_tic_cone_query(
     )
 
     logger.debug(f"Querying TIC via Pyticdb for {radius:.2f}deg cone around {ra=:.2f}, {dec=:.2f}")
-    tic_with_gaia_dr2 = tic.to_df(tic_cone_query)
+    tic_cone_query_results = tic.execute(tic_cone_query)
+    tic_with_gaia_dr2 = pd.DataFrame(
+        tic_cone_query_results, columns=[field.lower() for field in TIC_CATALOG_FIELDS]
+    )
     non_null_gaia_dr2_source_ids = tic_with_gaia_dr2["gaia"].dropna().astype(int)
 
     logger.debug(f"Querying Gaia DR2 to DR3 table for stars around {ra=:.2f}, {dec=:.2f}")
+    # Note: using `.in_` makes each source ID a separate parameter in SQLAlchemy's query
+    # construction. There is a maximum number of query parameters, which is not hit by 5deg cone
+    # queries, but if those queries ever get larger, `.in_` will break. In that case, `sa.any_`
+    # should be used instead, as in the following snipet:
+    # gaia_match_query = tic.select("dr2_to_dr3", "dr2_source_id", "dr3_source_id").where(
+    #     dr2_to_dr3.c.dr2_source_id == sa.any_(non_null_gaia_dr2_source_ids)
+    # )
     gaia_match_query = tic.select("dr2_to_dr3", "dr2_source_id", "dr3_source_id").where(
         dr2_to_dr3.c.dr2_source_id.in_(non_null_gaia_dr2_source_ids)
     )
-    gaia_match = tic.to_df(gaia_match_query)
+    gaia_match_query_results = tic.execute(gaia_match_query)
+    gaia_match = pd.DataFrame(gaia_match_query_results, columns=["dr2_source_id", "dr3_source_id"])
     gaia_match["dr2_source_id"] = gaia_match["dr2_source_id"].astype(str)
     gaia_match["dr3_source_id"] = pd.array(gaia_match["dr3_source_id"]).astype("Int64")
 
@@ -139,7 +150,9 @@ def get_tic_catalog_data(
             run_tic_cone_query_with_mag_cutoffs,
             zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg, strict=True),
         )
-    tic_data = Table.from_pandas(pd.concat(query_results).drop_duplicates("id"))
+    tic_data = Table.from_pandas(
+        pd.concat(results for results in query_results if len(results) > 0).drop_duplicates("id")
+    )
     tic_data["ra"].unit = u.deg
     tic_data["dec"].unit = u.deg
     tic_data["pmra"].unit = u.mas / u.yr
@@ -171,7 +184,10 @@ def _run_gaia_cone_query(ra_dec: tuple[float, float], radius: float = 5.0) -> pd
         as_query=True,
     )
     logger.debug(f"Querying Gaia via Pyticdb for {radius:.2f}deg cone around {ra=:.2f}, {dec=:.2f}")
-    return gaia.to_df(gaia_cone_query)
+    gaia_cone_query_results = gaia.execute(gaia_cone_query)
+    return pd.DataFrame(
+        gaia_cone_query_results, columns=[field.lower() for field in GAIA_CATALOG_FIELDS]
+    )
 
 
 def get_gaia_catalog_data(orbit: int, camera: int, ccd: int, nprocs: int = 1) -> Table:
@@ -197,7 +213,11 @@ def get_gaia_catalog_data(orbit: int, camera: int, ccd: int, nprocs: int = 1) ->
             _run_gaia_cone_query,
             zip(query_grid_centers.ra.deg, query_grid_centers.dec.deg, strict=True),
         )
-    gaia_data = Table.from_pandas(pd.concat(query_results).drop_duplicates("designation"))
+    gaia_data = Table.from_pandas(
+        pd.concat(results for results in query_results if len(results) > 0).drop_duplicates(
+            "designation"
+        )
+    )
     gaia_data["ra"].unit = u.deg
     gaia_data["dec"].unit = u.deg
     gaia_data["pmra"].unit = u.mas / u.yr

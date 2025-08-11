@@ -182,6 +182,18 @@ def make_epsfs_main(args: argparse.Namespace):
         manifest.camera = camera
         manifest.ccd = ccd
         ccd_source_files = list(manifest.source_directory.iterdir())
+        if args.cutout is not None:
+            # Filter `ccd_source_files` by cutouts specified by user
+            args_cutout_source_files = []
+            # The `Manifest` class doesn't support temporary parameters, so there's no good way to
+            # make this a list comprehension, which it should be.
+            for cutout_x, cutout_y in args.cutout:
+                manifest.cutout_x = cutout_x
+                manifest.cutout_y = cutout_y
+                args_cutout_source_files.append(manifest.source_file.resolve())
+            ccd_source_files = [
+                file for file in ccd_source_files if file.resolve() in args_cutout_source_files
+            ]
         if len(ccd_source_files) == 0:
             logger.warning(f"No cutout source files found for camera {camera} CCD {ccd}, skipping")
             continue

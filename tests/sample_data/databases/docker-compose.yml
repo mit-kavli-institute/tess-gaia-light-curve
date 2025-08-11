@@ -1,0 +1,25 @@
+name:
+  tglc-test-dbs
+
+services:
+  tic_db:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: tic
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: tglctester
+      POSTGRES_PASSWORD: password
+
+  gaia_db:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: gaia
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: tglctester
+      POSTGRES_PASSWORD: password

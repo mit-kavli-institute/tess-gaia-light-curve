@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from functools import partial
 from importlib import resources
 from itertools import product
@@ -343,8 +344,10 @@ def ffi(
     orbit: int,
     camera: int,
     ccd: int,
+    cutouts: Sequence[tuple[int, int]] | None,
     manifest: Manifest,
     cutout_size: int = 150,
+    cutout_overlap: int = 2,
     produce_mask: bool = False,
     nprocs: int = 1,
     replace: bool = False,
@@ -361,11 +364,16 @@ def ffi(
         TESS orbit of the FFI observations.
     camera, ccd : int
         TESS camera and CCD of FFIs that should be used.
+    cutouts : Iterable[tuple[int, int]] | None
+        Pairs of `(x, y)` coordinates of cutouts that should be created. If `None`, all cutouts are
+        created based on the specified size.
     manifest : Manifest
         Manifest object used to determine input/output file paths. The `orbit`, `camera`, and `ccd`
         fields are populated using arguments.
     cutout_size : int
-        Side length of cutouts. Large numbers recommended for better quality. Default = 150.
+        Side length of cutouts (pixels). Large numbers recommended for better quality. Default = 150.
+    cutout_overlap : int
+        Overlap between adjecent cutouts cutouts (pixels). Default = 2.
     produce_mask : bool
         Produce CCD mask instead of making cutout `Source` objects.
     nprocs : int
@@ -499,6 +507,11 @@ def ffi(
         gaia_catalog=gaia_catalog,
         tic_catalog=tic_catalog,
     )
+    if cutouts is None:
+        edge_cutout_size = cutout_size - cutout_overlap
+        center_cutout_size = cutout_size - (2 * cutout_overlap)
+        num_cutouts = 2 + (2048 - (2 * edge_cutout_size)) // center_cutout_size
+        cutouts = list(product(range(num_cutouts), repeat=2))
     # TODO remove this comment when the issue is resolved
     # Currently we don't actually do multiprocessing here because the catalogs can't be pickled.
     # There is a problem pickling astropy `MaskedQuantity` objects. There was some progress in
@@ -507,11 +520,11 @@ def ffi(
     consume_iterator_with_progress_bar(
         pool_map_if_multiprocessing(
             write_source_pickle_from_x_y,
-            product(range(14), repeat=2),
+            cutouts,
             nprocs=1,  # TODO change to `nprocs=procs` when issue above is resolved
             pool_map_method="imap_unordered",
         ),
         desc=f"Writing source pickle files for {camera}-{ccd}",
         unit="source",
-        total=14 * 14,
+        total=len(cutouts),
     )
