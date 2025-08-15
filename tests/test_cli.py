@@ -32,6 +32,7 @@ def test_base_parser_has_expected_arguments():
 
     assert isinstance(args.orbit, int)
     assert args.ccd is None
+    assert args.cutout is None
     assert isinstance(args.nprocs, int)
     assert isinstance(args.replace, bool)
     assert isinstance(args.debug, bool)
