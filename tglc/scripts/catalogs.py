@@ -85,21 +85,19 @@ def _run_tic_cone_query(
     tic_with_gaia_dr2 = pd.DataFrame(
         tic_cone_query_results, columns=[field.lower() for field in TIC_CATALOG_FIELDS]
     )
-    non_null_gaia_dr2_source_ids = tic_with_gaia_dr2["gaia"].dropna().astype(int)
+    non_null_gaia_dr2_source_ids = tic_with_gaia_dr2["gaia"].dropna().astype(int).tolist()
 
     logger.debug(f"Querying Gaia DR2 to DR3 table for stars around {ra=:.2f}, {dec=:.2f}")
-    # Note: using `.in_` makes each source ID a separate parameter in SQLAlchemy's query
-    # construction. There is a maximum number of query parameters, which is not hit by 5deg cone
-    # queries, but if those queries ever get larger, `.in_` will break. In that case, `sa.any_`
-    # should be used instead, as in the following snipet:
-    # gaia_match_query = tic.select("dr2_to_dr3", "dr2_source_id", "dr3_source_id").where(
-    #     dr2_to_dr3.c.dr2_source_id == sa.any_(non_null_gaia_dr2_source_ids)
-    # )
-    gaia_match_query = tic.select("dr2_to_dr3", "dr2_source_id", "dr3_source_id").where(
-        dr2_to_dr3.c.dr2_source_id.in_(non_null_gaia_dr2_source_ids)
-    )
-    gaia_match_query_results = tic.execute(gaia_match_query)
-    gaia_match = pd.DataFrame(gaia_match_query_results, columns=["dr2_source_id", "dr3_source_id"])
+
+    if len(non_null_gaia_dr2_source_ids) == 0:
+        gaia_match = pd.DataFrame(columns=["dr2_source_id", "dr3_source_id"])
+    else:
+        # Use ANY clause instead of IN to avoid PostgreSQL's parameter limit
+        gaia_match_query = tic.select("dr2_to_dr3", "dr2_source_id", "dr3_source_id").where(
+            dr2_to_dr3.c.dr2_source_id == sa.any_(non_null_gaia_dr2_source_ids)
+        )
+        gaia_match_query_results = tic.execute(gaia_match_query)
+        gaia_match = pd.DataFrame(gaia_match_query_results, columns=["dr2_source_id", "dr3_source_id"])
     gaia_match["dr2_source_id"] = gaia_match["dr2_source_id"].astype(str)
     gaia_match["dr3_source_id"] = pd.array(gaia_match["dr3_source_id"]).astype("Int64")
 

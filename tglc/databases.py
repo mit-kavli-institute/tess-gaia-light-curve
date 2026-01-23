@@ -43,23 +43,34 @@ class Database:
 
         return r_table, left_col == right_col
 
-    def by_id(self, tablename: str, id: typing.Any):
+    def by_id(
+        self,
+        tablename: str,
+        id: str | int | typing.Iterable[str | int],
+    ) -> sa.sql.elements.ColumnElement:
+        """Create WHERE clause for matching by primary key using ANY clause."""
         table = self.table(tablename)
-
-        # For now, no composite primary keys are allowed
         columns = tuple(table.primary_key.columns)
 
-        if len(columns) == 1:
-            if isinstance(id, str):
-                return columns[0] == id
-            try:
-                ids = list(id)
-                return columns[0].in_(ids)
-            except TypeError:
-                return columns[0] == id
-        else:
-            # Not supporting composite primary keys yet
-            raise NotImplementedError
+        if len(columns) != 1:
+            raise NotImplementedError("Composite primary keys are not supported")
+
+        column = columns[0]
+
+        if isinstance(id, str):
+            return column == id
+
+        try:
+            ids = id.tolist() if hasattr(id, "tolist") else list(id)
+        except TypeError:
+            return column == id
+
+        if len(ids) == 0:
+            return sa.false()
+        if len(ids) == 1:
+            return column == ids[0]
+
+        return column == sa.any_(ids)
 
     def execute(self, query):
         with self.Session() as db:
