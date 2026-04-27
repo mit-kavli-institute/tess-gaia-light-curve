@@ -9,14 +9,12 @@ import pathlib
 
 from tglc.utils.constants import (
     TESS_PIXEL_SATURATION_LEVEL,
-    convert_tess_flux_to_tess_magnitude,
     convert_tess_magnitude_to_tess_flux,
 )
 from tglc.epsf import make_tglc_design_matrix
 from tglc.light_curve import get_cutout_for_light_curve
 import astropy.units as u
 from astropy.stats import mad_std
-from scipy.ndimage import center_of_mass
 from qlp.util.databases import TIC
 from rich import print
 import pandas as pd
@@ -128,38 +126,45 @@ def get_unnormalized_aperture_photometry(
     exposure_time: u.Quantity,
     flux_portion: np.ndarray,
 ):
+    """
+    Aggregate aperture photometry over all good-quality cadences (no normalization).
+
+    Returns the median aperture-sum flux in e-/s across cadences with `quality_flags == 0`
+    and non-saturated values, along with the count of cadences contributing to that median,
+    the fraction of the target PSF falling in the aperture, the expected flux from the
+    target's TESS magnitude, and the pipeline-equivalent `local_background` factor.
+    """
     bottom, top, left, right = get_aperture_limits(
         aperture_size, x, y, images.shape[1], images.shape[2]
     )
     flux = np.nansum(images[:, bottom:top, left:right], axis=(1, 2)) * u.electron
-    centroids = (
-        np.array([center_of_mass(image[bottom:top, left:right]) for image in images]) * u.pixel
-    )
-    centroids[:, 0] += bottom * u.pixel
-    centroids[:, 1] += left * u.pixel
 
     is_saturated = flux > TESS_PIXEL_SATURATION_LEVEL * (aperture_size**2) * exposure_time / (
         2.0 * u.second
     )
     flux[is_saturated] = np.nan
-    centroids[is_saturated, :] = np.nan
+
+    good = quality_flags == 0
+    n_good_cadences = int(np.sum(~np.isnan(flux[good].value)))
+    median_flux = np.nanmedian(flux[good])
 
     expected_total_flux_per_cadence = convert_tess_magnitude_to_tess_flux(tmag) * exposure_time
     flux_portion_in_aperture = np.nansum(flux_portion[bottom:top, left:right])
     expected_aperture_flux = expected_total_flux_per_cadence * flux_portion_in_aperture
 
     # Matches tglc/aperture_photometry.py: median of good-quality flux minus expected level.
-    local_background = np.nanmedian(flux[quality_flags == 0]) - expected_aperture_flux
+    local_background = median_flux - expected_aperture_flux
 
     return (
-        flux / exposure_time,
+        median_flux / exposure_time,
+        n_good_cadences,
         flux_portion_in_aperture,
         expected_aperture_flux / exposure_time,
         local_background,
     )
 
 
-def analyze(source_path, epsf_file, safe_idx):
+def analyze(source_path, epsf_file):
     with source_path.open("rb") as source_pickle:
         source = pickle.load(source_pickle)
     epsf = np.load(epsf_file)
@@ -182,6 +187,8 @@ def analyze(source_path, epsf_file, safe_idx):
         flat_background, ignore_nan=True
     )
     quality_mask = np.array(source.quality) | high_background_points
+    good_cadences = quality_mask == 0
+    exposure_time = source.exposure * u.second
     nearest_pixel_x = np.round(source.gaia[f"sector_{source.sector}_x"]).astype(int)
     nearest_pixel_y = np.round(source.gaia[f"sector_{source.sector}_y"]).astype(int)
 
@@ -228,16 +235,51 @@ def analyze(source_path, epsf_file, safe_idx):
         target_ccd_x = star_positions[i][0] + source.ccd_x
         target_ccd_y = star_positions[i][1] + source.ccd_y
 
-        flux, flux_ratio, expected_flux, local_background = get_unnormalized_aperture_photometry(
+        (
+            observed_flux_decontam,
+            n_good_cadences,
+            flux_portion_in_aperture,
+            expected_flux,
+            local_background,
+        ) = get_unnormalized_aperture_photometry(
             light_curve_cutout,
             quality_mask,
             aperture_size,
             round(star_x),
             round(star_y),
             source.gaia["tess_mag"][i],
-            source.exposure * u.second,
+            exposure_time,
             psf_portions,
         )
+
+        # Raw (non-decontaminated) aperture sum on source.flux directly. For a vignetting
+        # study this is the primary signal — the decontaminated value above can inherit
+        # position-dependent ePSF fit bias at CCD edges.
+        target_x_src = round(star_positions[i][0])
+        target_y_src = round(star_positions[i][1])
+        raw_bottom, raw_top, raw_left, raw_right = get_aperture_limits(
+            aperture_size, target_x_src, target_y_src,
+            source.flux.shape[1], source.flux.shape[2],
+        )
+        raw_flux_ts = (
+            np.nansum(source.flux[:, raw_bottom:raw_top, raw_left:raw_right], axis=(1, 2))
+            * u.electron
+        )
+        raw_saturation_limit = (
+            TESS_PIXEL_SATURATION_LEVEL * (aperture_size**2) * exposure_time / (2.0 * u.second)
+        )
+        raw_flux_ts[raw_flux_ts > raw_saturation_limit] = np.nan
+        observed_flux_raw = np.nanmedian(raw_flux_ts[good_cadences]) / exposure_time
+
+        # Aperture clipped by the source frame (which aligns with the CCD edge for edge
+        # sources). Flagged, not dropped, so downstream can filter.
+        aperture_clipped = (
+            target_y_src - aperture_size // 2 < 0
+            or target_y_src + aperture_size // 2 + 1 > source.flux.shape[1]
+            or target_x_src - aperture_size // 2 < 0
+            or target_x_src + aperture_size // 2 + 1 > source.flux.shape[2]
+        )
+
         if tic_id not in tmag_lookup:
             continue
         tmag, e_tmag = tmag_lookup[tic_id]
@@ -245,11 +287,15 @@ def analyze(source_path, epsf_file, safe_idx):
             tic_id=tic_id,
             ccd_x=target_ccd_x,
             ccd_y=target_ccd_y,
-            observed_flux=flux[safe_idx].value,
+            observed_flux=observed_flux_decontam.value,
+            observed_flux_raw=observed_flux_raw.value,
+            flux_portion_in_aperture=float(flux_portion_in_aperture),
             expected_flux=expected_flux.value,
             local_background=local_background.value,
+            n_good_cadences=n_good_cadences,
+            aperture_clipped=aperture_clipped,
             tmag=tmag,
-            e_tmag=e_tmag
+            e_tmag=e_tmag,
         ))
     return source_path, payload
 
@@ -266,12 +312,14 @@ sector_info = io.read_sector_info(SECTOR)
 
 for orbit in sector_info.orbit_info:
     for camera, ccd in product(CAMERAS, CCDS):
-        cadence, safe_cadence_idx = find_safe_cadence_index(orbit.orbit_number, camera, ccd)
+        # Reference cadence for this (orbit, camera, ccd) — stamped into the CSV as an
+        # identifier of which FFI timeline this diagnostic came from. The photometry
+        # itself is medianed over all good cadences, not taken at this one cadence.
+        cadence, _ = find_safe_cadence_index(orbit.orbit_number, camera, ccd)
         manifest = Manifest(pathlib.Path("/pdo/qlp-data"), orbit=orbit.orbit_number, camera=camera, ccd=ccd)
         jobs = [
             (source_path,
-            manifest.epsf_directory / predict_epsf_file_from_source(source_path),
-            safe_cadence_idx)
+            manifest.epsf_directory / predict_epsf_file_from_source(source_path))
             for source_path in manifest.source_directory.iterdir()
         ]
         with mp.Pool() as pool:
