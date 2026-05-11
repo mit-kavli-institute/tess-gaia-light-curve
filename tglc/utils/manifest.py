@@ -3,9 +3,13 @@ TGLC organizes files in a particular way, and the `Manifest` class helps find th
 """
 
 from dataclasses import dataclass, fields
+import logging
 from pathlib import Path
 
 from tglc.utils.constants import get_orbits_in_sector, get_sector_containing_orbit
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -123,6 +127,37 @@ class Manifest:
     def source_file(self) -> Path:
         """Source cutout pickle file."""
         return self.source_directory / f"source_{self.cutout_x}_{self.cutout_y}.pkl"
+
+    def ffi_cbv_file(self, cbv_root: Path) -> Path | None:
+        """Locate the per-(orbit, camera, CCD) QLP-CBV FFI CBV FITS file.
+
+        The QLP-CBV runner writes files named
+        ``ffi_{run_id}_orbit{N}_cam{C}_ccd{D}.fits``; ``run_id`` is a hash that
+        varies per producer invocation, so we glob with a wildcard.
+
+        Parameters
+        ----------
+        cbv_root : Path
+            Root directory in which to search.
+
+        Returns
+        -------
+        Path | None
+            The matching CBV file, or ``None`` if no file matches. On multiple
+            matches the lexically first is returned and a warning is logged.
+        """
+        pattern = f"ffi_*_orbit{self.orbit}_cam{self.camera}_ccd{self.ccd}.fits"
+        candidates = sorted(Path(cbv_root).glob(pattern))
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            logger.warning(
+                "Multiple CBV files match %s under %s; using %s",
+                pattern,
+                cbv_root,
+                candidates[0].name,
+            )
+        return candidates[0]
 
     @property
     def epsf_directory(self) -> Path:

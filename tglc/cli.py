@@ -164,6 +164,14 @@ def parse_tglc_args() -> argparse.Namespace:
         action="store_true",
         help="Do not use GPUs to fit ePSFs (ignored if cupy not installed or GPUs not available)",
     )
+    all_parser.add_argument(
+        "--ffi-cbv-dir",
+        type=Path,
+        default=None,
+        help="Directory containing per-CCD QLP-CBV FFI CBV FITS files. When set, "
+        "CBV-based instrumental correction is applied to FFI pixels before cutouts "
+        "are written. Files are discovered per (orbit, camera, CCD).",
+    )
 
     catalogs_parser = tglc_commands.add_parser(
         "catalogs",
@@ -201,6 +209,14 @@ def parse_tglc_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Overlap between adjacent cutouts (pixels). Default=2.",
+    )
+    cutouts_parser.add_argument(
+        "--ffi-cbv-dir",
+        type=Path,
+        default=None,
+        help="Directory containing per-CCD QLP-CBV FFI CBV FITS files. When set, "
+        "CBV-based instrumental correction is applied to FFI pixels before cutouts "
+        "are written. Files are discovered per (orbit, camera, CCD).",
     )
 
     epsfs_parser = tglc_commands.add_parser(
