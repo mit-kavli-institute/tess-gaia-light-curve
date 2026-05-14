@@ -45,6 +45,8 @@ from astropy.stats import mad_std
 import h5py
 import matplotlib
 
+from tglc.lc_cbv import LCCBVData, UnsupportedLCCBVFormatError, load_lc_cbvs
+
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -105,10 +107,17 @@ METRICS: dict[str, MetricFn] = {
 # Detrender registry
 # ---------------------------------------------------------------------------
 
-DetrenderFn = Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]
+# Detrenders accept a uniform call shape: positional (time, rel_flux, good) and
+# an arbitrary kwargs context. Each detrender consumes only the kwargs it cares
+# about; the rest are absorbed into ``**_ctx``. This lets per-target context
+# (TIC ID, channel, cadence array) flow into detrenders that need it (lc_cbv)
+# without changing the call sites for those that don't (raw, wotan).
+DetrenderFn = Callable[..., np.ndarray]
 
 
-def _raw_detrender(_time: np.ndarray, rel_flux: np.ndarray, _good: np.ndarray) -> np.ndarray:
+def _raw_detrender(
+    _time: np.ndarray, rel_flux: np.ndarray, _good: np.ndarray, **_ctx
+) -> np.ndarray:
     return rel_flux
 
 
@@ -119,6 +128,7 @@ def _wotan_detrender(
     *,
     method: str,
     window_length: float,
+    **_ctx,
 ) -> np.ndarray:
     """Top-level (picklable) wotan-backed detrender.
 
@@ -135,17 +145,52 @@ def _wotan_detrender(
     return flat
 
 
-def _build_detrender_map(wotan_method: str, wotan_window: float) -> dict[str, DetrenderFn]:
+def _lc_cbv_detrender(
+    _time: np.ndarray,
+    rel_flux: np.ndarray,
+    _good: np.ndarray,
+    *,
+    lc_cbv_data: LCCBVData | None,
+    tic_id: int,
+    cadences: np.ndarray,
+    channel: str,
+    **_ctx,
+) -> np.ndarray:
+    """Subtract the LC-CBV-fit systematic trend per target.
+
+    Restricted to the three aperture channels — LC-CBV is fit on aperture
+    photometry, so applying it to ``Background`` (a different physical
+    quantity) is meaningless. We return all-NaN for ``Background`` and for
+    targets absent from the CBV product; the downstream metric then yields
+    NaN cleanly and pandas drops those rows in plots.
+    """
+    if channel == BACKGROUND_CHANNEL or lc_cbv_data is None:
+        return np.full_like(rel_flux, np.nan, dtype=np.float64)
+    trend = lc_cbv_data.trend_for_target(int(tic_id), cadences)
+    if trend is None:
+        return np.full_like(rel_flux, np.nan, dtype=np.float64)
+    return rel_flux.astype(np.float64, copy=False) - trend
+
+
+def _build_detrender_map(
+    wotan_method: str,
+    wotan_window: float,
+    lc_cbv_data: LCCBVData | None,
+) -> dict[str, DetrenderFn]:
     """Construct the (name → detrender) registry. All entries are picklable
     top-level functions or ``functools.partial`` objects so the dict survives
-    the multiprocessing spawn pickle.
+    the multiprocessing spawn pickle. ``lc_cbv`` is included only when an
+    LC-CBV product was loaded.
     """
-    return {
+    detrenders: dict[str, DetrenderFn] = {
         "raw": _raw_detrender,
         f"wotan_{wotan_method}": partial(
             _wotan_detrender, method=wotan_method, window_length=wotan_window
         ),
     }
+    if lc_cbv_data is not None:
+        detrenders["lc_cbv"] = partial(_lc_cbv_detrender, lc_cbv_data=lc_cbv_data)
+    return detrenders
 
 
 def _require_wotan() -> None:
@@ -188,12 +233,26 @@ def _bg_to_rel_flux(flux: np.ndarray) -> np.ndarray:
     return (flux - med) / med
 
 
+def _peek_lc_attrs(path: Path) -> dict:
+    """Read only the file-level HDF5 attrs we need to locate the LC-CBV file.
+
+    Cheaper than the full ``read_tglc_lc`` (no dataset reads) and used exactly
+    once in the parent process to derive the per-(orbit, cam, ccd) CBV path.
+    """
+    with h5py.File(path, "r") as f:
+        return {
+            "orbit": int(f.attrs["Orbit"]),
+            "camera": int(f.attrs["Camera"]),
+            "ccd": int(f.attrs["CCD"]),
+        }
+
+
 def read_tglc_lc(path: Path) -> dict:
     """Open a TGLC light-curve HDF5 file and return the data we compare on.
 
     Returned dict has scalar metadata plus arrays:
-      tic_id, tmag, ra, dec, sector, camera, ccd,
-      bjd (n,), quality (n,),
+      tic_id, tmag, ra, dec, orbit, sector, camera, ccd,
+      bjd (n,), cadence (n,), quality (n,),
       rel_flux_by_channel: {"Primary": (n,), "Small": (n,), "Large": (n,),
                             "Background": (n,)}
 
@@ -201,6 +260,10 @@ def read_tglc_lc(path: Path) -> dict:
     share a formula: apertures use ``10**(-0.4·Δm)`` while the background
     uses ``(flux - median) / median``. Moving that branching out of the
     worker keeps the per-channel loop uniform.
+
+    ``cadence`` is exposed because the LC-CBV detrender aligns its CBVs to
+    raw cadence numbers (not BJD); ``orbit`` is exposed so the main process
+    can look up the per-(orbit, cam, ccd) LC-CBV FITS file.
     """
     logger.debug("read_tglc_lc: opening %s", path)
     with h5py.File(path, "r") as f:
@@ -218,10 +281,12 @@ def read_tglc_lc(path: Path) -> dict:
             "tmag": float(attrs["TessMag"]),
             "ra": float(attrs["RA"]),
             "dec": float(attrs["Dec"]),
+            "orbit": int(attrs["Orbit"]),
             "sector": int(attrs["Sector"]),
             "camera": int(attrs["Camera"]),
             "ccd": int(attrs["CCD"]),
             "bjd": np.asarray(lc["BJD"][:], dtype=np.float64),
+            "cadence": np.asarray(lc["Cadence"][:], dtype=np.int64),
             "quality": np.asarray(lc["QualityFlag"][:], dtype=np.int64),
             "rel_flux_by_channel": rel_flux_by_channel,
         }
@@ -257,10 +322,15 @@ def _compute_rows(
     for channel in CHANNELS:
         base_rel = base["rel_flux_by_channel"][channel]
         cbv_rel = cbv["rel_flux_by_channel"][channel]
+        # Per-call detrender context. ``raw`` / ``wotan_*`` ignore these (they
+        # accept ``**_ctx``); ``lc_cbv`` consumes ``tic_id``, ``cadences``,
+        # ``channel`` to look up and subtract the per-target trend.
+        base_ctx = dict(tic_id=base["tic_id"], cadences=base["cadence"], channel=channel)
+        cbv_ctx = dict(tic_id=cbv["tic_id"], cadences=cbv["cadence"], channel=channel)
 
         for det_name, detrend in detrender_map.items():
-            base_series = detrend(base["bjd"], base_rel, base_good)
-            cbv_series = detrend(cbv["bjd"], cbv_rel, cbv_good)
+            base_series = detrend(base["bjd"], base_rel, base_good, **base_ctx)
+            cbv_series = detrend(cbv["bjd"], cbv_rel, cbv_good, **cbv_ctx)
             base_mask = base_good & np.isfinite(base_series)
             cbv_mask = cbv_good & np.isfinite(cbv_series)
 
@@ -614,6 +684,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--chunksize", type=int, default=64, help="Pool.imap_unordered chunk size")
     p.add_argument("--debug", action="store_true")
+    p.add_argument(
+        "--lc-cbv-dir",
+        type=Path,
+        default=None,
+        help="Directory containing per-(orbit, cam, ccd) LC-CBV FITS files named "
+        "cbv_lc_{orbit}_{cam}_{ccd}.fits (qlp-cbv draft-1, PRODUCT='qlp-cbv-lc'). "
+        "When set, a third detrender ``lc_cbv`` is registered that subtracts the "
+        "per-target trend on aperture channels (Background is skipped).",
+    )
     return p.parse_args(argv)
 
 
@@ -646,7 +725,6 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info("checking wotan availability")
     _require_wotan()
-    detrender_map = _build_detrender_map(args.wotan_method, args.wotan_window)
 
     logger.info("indexing input directories")
     pairs, base_only, cbv_only = _pair_iterator(args.baseline_lc_dir, args.cbv_lc_dir, args.limit)
@@ -656,6 +734,39 @@ def main(argv: list[str] | None = None) -> int:
     if not pairs:
         logger.error("No matching TIC IDs between the two directories. Exiting.")
         return 1
+
+    # Resolve the LC-CBV product (if any). Loaded once in the parent process so
+    # every worker gets the same payload via the partial — avoids 40 concurrent
+    # FITS opens on whatever shared filesystem the file lives on, and makes the
+    # downstream lc_cbv detrender a pure lookup.
+    lc_cbv_data: LCCBVData | None = None
+    if args.lc_cbv_dir is not None:
+        first_attrs = _peek_lc_attrs(pairs[0][0])
+        cbv_path = (
+            args.lc_cbv_dir
+            / f"cbv_lc_{first_attrs['orbit']}_{first_attrs['camera']}_{first_attrs['ccd']}.fits"
+        )
+        if not cbv_path.is_file():
+            logger.error("LC-CBV file not found at %s — skipping lc_cbv detrender", cbv_path)
+        else:
+            logger.info("loading LC-CBV product %s", cbv_path)
+            try:
+                lc_cbv_data = load_lc_cbvs(cbv_path)
+                logger.info(
+                    "  LC-CBV: orbit=%d cam=%d ccd=%d, NCBV=%d, NCAD=%d, NTGT=%d",
+                    lc_cbv_data.orbit,
+                    lc_cbv_data.camera,
+                    lc_cbv_data.ccd,
+                    lc_cbv_data.cbvs.shape[0],
+                    lc_cbv_data.cbvs.shape[1],
+                    lc_cbv_data.theta.shape[0],
+                )
+            except UnsupportedLCCBVFormatError as exc:
+                logger.error("refused LC-CBV product %s: %s", cbv_path, exc)
+                lc_cbv_data = None
+
+    detrender_map = _build_detrender_map(args.wotan_method, args.wotan_window, lc_cbv_data)
+    logger.info("active detrenders: %s", sorted(detrender_map.keys()))
 
     results_path = args.out_dir / "per_target.h5"
     counts = {
