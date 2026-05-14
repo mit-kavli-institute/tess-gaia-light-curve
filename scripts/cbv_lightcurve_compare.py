@@ -63,6 +63,11 @@ faulthandler.enable(all_threads=True)
 logger = logging.getLogger("cbv_lc_compare")
 
 APERTURES = ("Primary", "Small", "Large")
+# Channels compared per target: the three aperture magnitudes plus the per-cadence
+# background flux. The schema column is named ``channel`` (not ``aperture``) because
+# Background isn't an aperture.
+BACKGROUND_CHANNEL = "Background"
+CHANNELS = (*APERTURES, BACKGROUND_CHANNEL)
 
 
 # ---------------------------------------------------------------------------
@@ -160,11 +165,27 @@ def _require_wotan() -> None:
 
 
 def _mag_to_rel_flux(mag: np.ndarray) -> np.ndarray:
-    """Convert TESS magnitude to relative flux (median-normalised)."""
+    """Convert TESS magnitude to relative flux (median-normalised, centred near 1)."""
     med = np.nanmedian(mag)
     if not np.isfinite(med):
         return np.full_like(mag, np.nan, dtype=np.float64)
     return np.power(10.0, -0.4 * (mag - med))
+
+
+def _bg_to_rel_flux(flux: np.ndarray) -> np.ndarray:
+    """Median-normalise a background-flux time series.
+
+    Returns the relative deviation around 0: ``(flux - median) / median``. NaN
+    everywhere if the median is non-finite or ≤ 0 (parallels the guard in
+    ``_mag_to_rel_flux``). The MAD-of-adjacent-diffs metric is offset-invariant,
+    so this choice of centring does not change the reported ppm number relative
+    to ``flux / median``; it's chosen for the cleaner zero-centred series in
+    the saved series should any future metric ever inspect it directly.
+    """
+    med = np.nanmedian(flux)
+    if not np.isfinite(med) or med <= 0:
+        return np.full_like(flux, np.nan, dtype=np.float64)
+    return (flux - med) / med
 
 
 def read_tglc_lc(path: Path) -> dict:
@@ -173,17 +194,25 @@ def read_tglc_lc(path: Path) -> dict:
     Returned dict has scalar metadata plus arrays:
       tic_id, tmag, ra, dec, sector, camera, ccd,
       bjd (n,), quality (n,),
-      magnitudes: {"Primary": (n,), "Small": (n,), "Large": (n,)}
+      rel_flux_by_channel: {"Primary": (n,), "Small": (n,), "Large": (n,),
+                            "Background": (n,)}
+
+    The reader owns relative-flux normalisation because the channels don't
+    share a formula: apertures use ``10**(-0.4·Δm)`` while the background
+    uses ``(flux - median) / median``. Moving that branching out of the
+    worker keeps the per-channel loop uniform.
     """
     logger.debug("read_tglc_lc: opening %s", path)
     with h5py.File(path, "r") as f:
         attrs = f.attrs
         lc = f["LightCurve"]
         photometry = lc["AperturePhotometry"]
-        magnitudes = {
-            name: np.asarray(photometry[f"{name}Aperture"]["RawMagnitude"][:], dtype=np.float64)
-            for name in APERTURES
-        }
+        rel_flux_by_channel: dict[str, np.ndarray] = {}
+        for name in APERTURES:
+            mag = np.asarray(photometry[f"{name}Aperture"]["RawMagnitude"][:], dtype=np.float64)
+            rel_flux_by_channel[name] = _mag_to_rel_flux(mag)
+        bg_flux = np.asarray(lc["Background"]["Value"][:], dtype=np.float64)
+        rel_flux_by_channel[BACKGROUND_CHANNEL] = _bg_to_rel_flux(bg_flux)
         out = {
             "tic_id": int(attrs["TIC ID"]),
             "tmag": float(attrs["TessMag"]),
@@ -194,7 +223,7 @@ def read_tglc_lc(path: Path) -> dict:
             "ccd": int(attrs["CCD"]),
             "bjd": np.asarray(lc["BJD"][:], dtype=np.float64),
             "quality": np.asarray(lc["QualityFlag"][:], dtype=np.int64),
-            "magnitudes": magnitudes,
+            "rel_flux_by_channel": rel_flux_by_channel,
         }
     return out
 
@@ -209,7 +238,7 @@ def _compute_rows(
     cbv_path: Path,
     detrender_map: dict[str, DetrenderFn],
 ) -> list[dict] | None:
-    """Compute one row per (aperture, detrender, metric) for a single TIC."""
+    """Compute one row per (channel, detrender, metric) for a single TIC."""
     base = read_tglc_lc(baseline_path)
     cbv = read_tglc_lc(cbv_path)
     if base["tic_id"] != cbv["tic_id"]:
@@ -222,14 +251,12 @@ def _compute_rows(
         )
         return None
 
+    base_good = base["quality"] == 0
+    cbv_good = cbv["quality"] == 0
     rows: list[dict] = []
-    for aperture in APERTURES:
-        base_mag = base["magnitudes"][aperture]
-        cbv_mag = cbv["magnitudes"][aperture]
-        base_good = base["quality"] == 0
-        cbv_good = cbv["quality"] == 0
-        base_rel = _mag_to_rel_flux(base_mag)
-        cbv_rel = _mag_to_rel_flux(cbv_mag)
+    for channel in CHANNELS:
+        base_rel = base["rel_flux_by_channel"][channel]
+        cbv_rel = cbv["rel_flux_by_channel"][channel]
 
         for det_name, detrend in detrender_map.items():
             base_series = detrend(base["bjd"], base_rel, base_good)
@@ -253,7 +280,7 @@ def _compute_rows(
                         "sector": base["sector"],
                         "camera": base["camera"],
                         "ccd": base["ccd"],
-                        "aperture": aperture,
+                        "channel": channel,
                         "detrender": det_name,
                         "metric": metric_name,
                         "baseline": b,
@@ -376,7 +403,7 @@ _COLUMN_SCHEMA: tuple[tuple[str, object], ...] = (
     ("sector", np.int32),
     ("camera", np.int32),
     ("ccd", np.int32),
-    ("aperture", _VLEN_STR),
+    ("channel", _VLEN_STR),
     ("detrender", _VLEN_STR),
     ("metric", _VLEN_STR),
     ("baseline", np.float64),
@@ -480,7 +507,7 @@ def _write_summary(
     """
     df = _read_results(
         results_path,
-        columns=("aperture", "detrender", "metric", "baseline", "cbv", "delta", "rel_delta"),
+        columns=("channel", "detrender", "metric", "baseline", "cbv", "delta", "rel_delta"),
     )
     lines: list[str] = []
     lines.append("CBV light-curve comparison summary")
@@ -493,12 +520,12 @@ def _write_summary(
     lines.append(f"wotan: method={wotan_method}, window={wotan_window} d")
     lines.append("")
 
-    grouped = df.groupby(["aperture", "detrender", "metric"], sort=True)
-    for (ap, det, met), sub in grouped:
+    grouped = df.groupby(["channel", "detrender", "metric"], sort=True)
+    for (ch, det, met), sub in grouped:
         n = len(sub)
         if n == 0:
             continue
-        lines.append(f"[{ap} / {det} / {met}]  n={n}")
+        lines.append(f"[{ch} / {det} / {met}]  n={n}")
         for col in ("baseline", "cbv", "delta", "rel_delta"):
             med = float(np.nanmedian(sub[col]))
             lines.append(f"    median {col:9s} = {med:+.6g}")
@@ -515,14 +542,14 @@ def _plot_precision_vs_tmag(
     out_dir: Path,
     scatter_max: int,
 ) -> None:
-    """One figure per (aperture, detrender, metric) combination."""
+    """One figure per (channel, detrender, metric) combination."""
     df = _read_results(
         results_path,
-        columns=("aperture", "detrender", "metric", "tmag", "baseline", "cbv"),
+        columns=("channel", "detrender", "metric", "tmag", "baseline", "cbv"),
     )
     rng = np.random.default_rng(seed=0)
 
-    for (ap, det, met), sub in df.groupby(["aperture", "detrender", "metric"]):
+    for (ch, det, met), sub in df.groupby(["channel", "detrender", "metric"]):
         sub = sub.dropna(subset=["tmag", "baseline", "cbv"])
         if sub.empty:
             continue
@@ -544,10 +571,10 @@ def _plot_precision_vs_tmag(
         ax.set_yscale("log")
         ax.set_xlabel("TessMag")
         ax.set_ylabel(f"{met}")
-        ax.set_title(f"{ap}Aperture / detrender={det}")
+        ax.set_title(f"channel={ch} / detrender={det}")
         ax.legend()
         fig.tight_layout()
-        out_path = out_dir / f"precision_vs_tmag_{ap}_{det}.png"
+        out_path = out_dir / f"precision_vs_tmag_{ch}_{det}.png"
         fig.savefig(out_path, dpi=120)
         plt.close(fig)
         logger.info("Wrote %s", out_path)
