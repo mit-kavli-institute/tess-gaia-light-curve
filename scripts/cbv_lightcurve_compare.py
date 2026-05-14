@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+import faulthandler
 from functools import partial
 import logging
 import multiprocessing as mp
@@ -50,6 +51,13 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from tqdm import tqdm  # noqa: E402
+
+
+# Install the C-level crash handler before we do any heavy lifting. If a
+# native call (most likely h5py / libhdf5) segfaults, faulthandler prints a
+# Python traceback to stderr — the only signal we get back from a crash.
+# ``all_threads=True`` covers any background threads h5py/numba may spawn.
+faulthandler.enable(all_threads=True)
 
 
 logger = logging.getLogger("cbv_lc_compare")
@@ -167,6 +175,7 @@ def read_tglc_lc(path: Path) -> dict:
       bjd (n,), quality (n,),
       magnitudes: {"Primary": (n,), "Small": (n,), "Large": (n,)}
     """
+    logger.debug("read_tglc_lc: opening %s", path)
     with h5py.File(path, "r") as f:
         attrs = f.attrs
         lc = f["LightCurve"]
@@ -264,11 +273,16 @@ def compare_one_target(
     """Top-level worker. Returns rows on success, ``None`` on any failure.
 
     We swallow ``Exception`` (not ``BaseException``) so SIGINT still
-    propagates and shuts the pool down promptly.
+    propagates and shuts the pool down promptly. A *segfault* inside the
+    h5py / numpy / wotan C extensions will NOT be caught here — that crash
+    surfaces in the worker's stderr via ``faulthandler``.
     """
     baseline_path, cbv_path = pair
+    logger.debug("compare_one_target: start %s", baseline_path.name)
     try:
-        return _compute_rows(baseline_path, cbv_path, detrender_map)
+        rows = _compute_rows(baseline_path, cbv_path, detrender_map)
+        logger.debug("compare_one_target: done %s", baseline_path.name)
+        return rows
     except Exception as exc:
         logger.warning(
             "Failed on %s: %s: %s",
@@ -278,6 +292,23 @@ def compare_one_target(
         )
         logger.debug("Traceback:\n%s", traceback.format_exc())
         return None
+
+
+def _worker_init(log_level: int) -> None:
+    """Pool initializer. Spawned children inherit no logging config and no
+    faulthandler, so we re-arm both here. Running this once per worker also
+    confirms the worker actually started — if you don't see "worker ready"
+    for a child, it died during spawn (often a fork/HDF5 init crash).
+    """
+    import faulthandler as _fh
+
+    _fh.enable(all_threads=True)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] worker[%(process)d] %(name)s: %(message)s",
+        force=True,
+    )
+    logger.info("worker ready (pid=%d)", os.getpid())
 
 
 # ---------------------------------------------------------------------------
@@ -290,9 +321,14 @@ def _index_lc_dir(lc_dir: Path) -> dict[str, Path]:
     overhead of fnmatch on giant directories.
     """
     out: dict[str, Path] = {}
+    count = 0
     for entry in lc_dir.iterdir():
         if entry.suffix == ".h5":
             out[entry.stem] = entry
+            count += 1
+            if count % 250_000 == 0:
+                logger.info("  …indexed %d files in %s", count, lc_dir)
+    logger.info("  indexed %d .h5 files in %s", count, lc_dir)
     return out
 
 
@@ -556,15 +592,36 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        force=True,
+    )
+    # If we crash later, this confirms we made it past argv parsing & logging.
+    logger.info(
+        "starting; python=%s, pid=%d, n_procs=%d, baseline=%s, cbv=%s, out=%s",
+        sys.version.split()[0],
+        os.getpid(),
+        args.n_procs,
+        args.baseline_lc_dir,
+        args.cbv_lc_dir,
+        args.out_dir,
+    )
+    logger.info("h5py=%s, hdf5=%s", h5py.__version__, h5py.version.hdf5_version)
+    logger.info(
+        "HDF5_USE_FILE_LOCKING=%r (libhdf5 file-locking on shared filesystems "
+        "is a frequent segfault source — set to 'FALSE' if you see crashes "
+        "while opening LC files on NFS)",
+        os.environ.get("HDF5_USE_FILE_LOCKING"),
     )
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.info("checking wotan availability")
     _require_wotan()
     detrender_map = _build_detrender_map(args.wotan_method, args.wotan_window)
 
+    logger.info("indexing input directories")
     pairs, base_only, cbv_only = _pair_iterator(args.baseline_lc_dir, args.cbv_lc_dir, args.limit)
     logger.info(
         "Pairing: %d matched, %d baseline-only, %d cbv-only", len(pairs), base_only, cbv_only
@@ -588,10 +645,17 @@ def main(argv: list[str] | None = None) -> int:
     # "spawn" is the safer default for HDF5/h5py and matplotlib-loaded processes;
     # the worker function and detrender map are picklable.
     ctx = mp.get_context("spawn")
+    logger.info("opening output HDF5 stream at %s", results_path)
     with _H5StreamWriter(results_path, chunk_size=args.flush_every) as writer:
         if args.n_procs > 1:
-            pool = ctx.Pool(processes=args.n_procs)
+            logger.info("spawning pool with %d workers", args.n_procs)
+            pool = ctx.Pool(
+                processes=args.n_procs,
+                initializer=_worker_init,
+                initargs=(log_level,),
+            )
             try:
+                logger.info("dispatching %d targets (chunksize=%d)", len(pairs), args.chunksize)
                 results = pool.imap_unordered(worker, pairs, chunksize=args.chunksize)
                 for rows in tqdm(results, total=len(pairs), unit="target"):
                     if rows is None:
@@ -600,11 +664,13 @@ def main(argv: list[str] | None = None) -> int:
                     counts["succeeded"] += 1
                     buffer.extend(rows)
                     if len(buffer) >= args.flush_every:
+                        logger.debug("flushing %d rows to HDF5", len(buffer))
                         _flush_buffer(buffer, writer)
             finally:
                 pool.close()
                 pool.join()
         else:
+            logger.info("running serial loop over %d targets", len(pairs))
             for pair in tqdm(pairs, total=len(pairs), unit="target"):
                 rows = worker(pair)
                 if rows is None:
