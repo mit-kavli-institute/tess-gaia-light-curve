@@ -2,7 +2,8 @@
 Compare two TGLC light-curve trees (e.g. baseline vs. FFI-CBV-corrected) on
 per-target precision metrics, with optional wotan detrending and per-magnitude
 binning. Designed to scale to ~10^7 targets via process-pool parallelism and
-streaming Parquet writes.
+streaming HDF5 writes (one resizable, chunked, gzip-compressed dataset per
+column; no Rust build deps).
 
 The TGLC paper defines precision as the MAD of differences between adjacent
 flux points; that is the day-one metric implemented here. Other metrics and
@@ -48,8 +49,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-import pyarrow as pa  # noqa: E402
-import pyarrow.parquet as pq  # noqa: E402
 from tqdm import tqdm  # noqa: E402
 
 
@@ -119,9 +118,7 @@ def _wotan_detrender(
     masked[~good] = np.nan
     if np.count_nonzero(np.isfinite(masked)) < 4:
         return masked
-    flat, _ = flatten(
-        time, masked, method=method, window_length=window_length, return_trend=True
-    )
+    flat, _ = flatten(time, masked, method=method, window_length=window_length, return_trend=True)
     return flat
 
 
@@ -325,36 +322,107 @@ def _pair_iterator(
 
 
 # ---------------------------------------------------------------------------
-# Schema
+# Streaming HDF5 writer
 # ---------------------------------------------------------------------------
 
+# Per-column dtype. Strings use h5py's variable-length UTF-8 dtype so the
+# column round-trips to Python str rather than fixed-width bytes (which pandas
+# would otherwise surface as object/bytes mixes).
+_VLEN_STR = h5py.string_dtype(encoding="utf-8")
 
-def _arrow_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            ("tic_id", pa.int64()),
-            ("tmag", pa.float64()),
-            ("ra", pa.float64()),
-            ("dec", pa.float64()),
-            ("sector", pa.int32()),
-            ("camera", pa.int32()),
-            ("ccd", pa.int32()),
-            ("aperture", pa.string()),
-            ("detrender", pa.string()),
-            ("metric", pa.string()),
-            ("baseline", pa.float64()),
-            ("cbv", pa.float64()),
-            ("delta", pa.float64()),
-            ("rel_delta", pa.float64()),
-        ]
-    )
+# Ordered (name, dtype) — drives both writer creation and reader iteration so
+# the file layout stays consistent.
+_COLUMN_SCHEMA: tuple[tuple[str, object], ...] = (
+    ("tic_id", np.int64),
+    ("tmag", np.float64),
+    ("ra", np.float64),
+    ("dec", np.float64),
+    ("sector", np.int32),
+    ("camera", np.int32),
+    ("ccd", np.int32),
+    ("aperture", _VLEN_STR),
+    ("detrender", _VLEN_STR),
+    ("metric", _VLEN_STR),
+    ("baseline", np.float64),
+    ("cbv", np.float64),
+    ("delta", np.float64),
+    ("rel_delta", np.float64),
+)
+_COLUMN_NAMES = tuple(name for name, _ in _COLUMN_SCHEMA)
 
 
-def _flush_buffer(buffer: list[dict], writer: pq.ParquetWriter, schema: pa.Schema) -> None:
+class _H5StreamWriter:
+    """Append-mode HDF5 writer: one resizable, chunked, gzip-compressed
+    dataset per column. Pure-C dep (h5py / libhdf5); no Rust toolchain
+    required at install time.
+    """
+
+    def __init__(self, path: Path, chunk_size: int):
+        self._path = path
+        self._chunk_size = chunk_size
+        self._file = h5py.File(path, "w")
+        self._n = 0
+        for name, dt in _COLUMN_SCHEMA:
+            self._file.create_dataset(
+                name,
+                shape=(0,),
+                maxshape=(None,),
+                chunks=(chunk_size,),
+                dtype=dt,
+                compression="gzip",
+                compression_opts=4,
+            )
+
+    def write(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        n = len(rows)
+        new_size = self._n + n
+        for name, dt in _COLUMN_SCHEMA:
+            ds = self._file[name]
+            ds.resize((new_size,))
+            if dt is _VLEN_STR:
+                ds[self._n : new_size] = [r[name] for r in rows]
+            else:
+                ds[self._n : new_size] = np.asarray([r[name] for r in rows], dtype=dt)
+        self._n = new_size
+
+    def close(self) -> None:
+        self._file.attrs["n_rows"] = self._n
+        self._file.close()
+
+    def __enter__(self) -> _H5StreamWriter:
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.close()
+
+
+def _read_results(path: Path, columns: tuple[str, ...] | None = None) -> pd.DataFrame:
+    """Load (a subset of) result columns from the streaming HDF5 file.
+
+    h5py 3.x surfaces variable-length UTF-8 datasets as ``object`` arrays of
+    ``bytes``; we decode those columns to ``str`` so downstream pandas
+    ``groupby`` keys and the plot filenames are plain text, not ``b'...'``.
+    """
+    cols = columns if columns is not None else _COLUMN_NAMES
+    data: dict[str, np.ndarray] = {}
+    with h5py.File(path, "r") as f:
+        for name in cols:
+            arr = f[name][:]
+            if arr.dtype == object:
+                arr = np.array(
+                    [s.decode("utf-8") if isinstance(s, (bytes, bytearray)) else s for s in arr],
+                    dtype=object,
+                )
+            data[name] = arr
+    return pd.DataFrame(data)
+
+
+def _flush_buffer(buffer: list[dict], writer: _H5StreamWriter) -> None:
     if not buffer:
         return
-    table = pa.Table.from_pylist(buffer, schema=schema)
-    writer.write_table(table)
+    writer.write(buffer)
     buffer.clear()
 
 
@@ -364,18 +432,20 @@ def _flush_buffer(buffer: list[dict], writer: pq.ParquetWriter, schema: pa.Schem
 
 
 def _write_summary(
-    parquet_path: Path,
+    results_path: Path,
     summary_path: Path,
     counts: dict[str, int],
     wotan_method: str,
     wotan_window: float,
 ) -> None:
-    """Compute aggregate stats with pyarrow (does not load full table)."""
-    table = pq.read_table(
-        parquet_path,
-        columns=["aperture", "detrender", "metric", "baseline", "cbv", "delta", "rel_delta"],
+    """Compute aggregate stats from the streamed HDF5 result file. Reads only
+    the columns the summary needs, so peak memory scales with metric columns
+    × n_rows, not the full schema.
+    """
+    df = _read_results(
+        results_path,
+        columns=("aperture", "detrender", "metric", "baseline", "cbv", "delta", "rel_delta"),
     )
-    df = table.to_pandas()
     lines: list[str] = []
     lines.append("CBV light-curve comparison summary")
     lines.append("=" * 50)
@@ -405,14 +475,15 @@ def _write_summary(
 
 
 def _plot_precision_vs_tmag(
-    parquet_path: Path,
+    results_path: Path,
     out_dir: Path,
     scatter_max: int,
 ) -> None:
     """One figure per (aperture, detrender, metric) combination."""
-    df = pq.read_table(
-        parquet_path, columns=["aperture", "detrender", "metric", "tmag", "baseline", "cbv"]
-    ).to_pandas()
+    df = _read_results(
+        results_path,
+        columns=("aperture", "detrender", "metric", "tmag", "baseline", "cbv"),
+    )
     rng = np.random.default_rng(seed=0)
 
     for (ap, det, met), sub in df.groupby(["aperture", "detrender", "metric"]):
@@ -464,12 +535,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--n-procs", type=int, default=os.cpu_count() or 1)
     p.add_argument(
-        "--flush-every", type=int, default=50_000, help="rows buffered before parquet flush"
+        "--flush-every",
+        type=int,
+        default=50_000,
+        help="rows buffered before HDF5 flush; also the per-column chunk size on disk",
     )
     p.add_argument(
         "--scatter-max", type=int, default=200_000, help="max scatter points per plot subgroup"
     )
-    p.add_argument("--csv", action="store_true", help="also emit per_target.csv alongside parquet")
+    p.add_argument(
+        "--csv", action="store_true", help="also emit per_target.csv alongside per_target.h5"
+    )
     p.add_argument(
         "--limit", type=int, default=None, help="cap total target pairs (for smoke runs)"
     )
@@ -497,8 +573,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("No matching TIC IDs between the two directories. Exiting.")
         return 1
 
-    schema = _arrow_schema()
-    parquet_path = args.out_dir / "per_target.parquet"
+    results_path = args.out_dir / "per_target.h5"
     counts = {
         "matched": len(pairs),
         "succeeded": 0,
@@ -513,7 +588,7 @@ def main(argv: list[str] | None = None) -> int:
     # "spawn" is the safer default for HDF5/h5py and matplotlib-loaded processes;
     # the worker function and detrender map are picklable.
     ctx = mp.get_context("spawn")
-    with pq.ParquetWriter(parquet_path, schema=schema, compression="zstd") as writer:
+    with _H5StreamWriter(results_path, chunk_size=args.flush_every) as writer:
         if args.n_procs > 1:
             pool = ctx.Pool(processes=args.n_procs)
             try:
@@ -525,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
                     counts["succeeded"] += 1
                     buffer.extend(rows)
                     if len(buffer) >= args.flush_every:
-                        _flush_buffer(buffer, writer, schema)
+                        _flush_buffer(buffer, writer)
             finally:
                 pool.close()
                 pool.join()
@@ -538,29 +613,29 @@ def main(argv: list[str] | None = None) -> int:
                 counts["succeeded"] += 1
                 buffer.extend(rows)
                 if len(buffer) >= args.flush_every:
-                    _flush_buffer(buffer, writer, schema)
-        _flush_buffer(buffer, writer, schema)
+                    _flush_buffer(buffer, writer)
+        _flush_buffer(buffer, writer)
 
     logger.info(
         "Done: succeeded=%d, failed=%d, written to %s",
         counts["succeeded"],
         counts["failed"],
-        parquet_path,
+        results_path,
     )
 
     if args.csv:
         csv_path = args.out_dir / "per_target.csv"
-        pq.read_table(parquet_path).to_pandas().to_csv(csv_path, index=False)
+        _read_results(results_path).to_csv(csv_path, index=False)
         logger.info("Wrote %s", csv_path)
 
     _write_summary(
-        parquet_path,
+        results_path,
         args.out_dir / "summary.txt",
         counts,
         wotan_method=args.wotan_method,
         wotan_window=args.wotan_window,
     )
-    _plot_precision_vs_tmag(parquet_path, args.out_dir, args.scatter_max)
+    _plot_precision_vs_tmag(results_path, args.out_dir, args.scatter_max)
     return 0
 
 
