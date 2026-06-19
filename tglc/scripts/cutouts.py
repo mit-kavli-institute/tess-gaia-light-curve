@@ -21,8 +21,25 @@ def make_cutouts_main(args: argparse.Namespace):
     Assumes `tglc catalogs` has already been run.
     """
     manifest = Manifest(args.tglc_data_dir)
+    ffi_cbv_dir = getattr(args, "ffi_cbv_dir", None)
 
     for camera, ccd in args.ccd:
+        ffi_cbv_file = None
+        if ffi_cbv_dir is not None:
+            manifest.orbit = args.orbit
+            manifest.camera = camera
+            manifest.ccd = ccd
+            ffi_cbv_file = manifest.ffi_cbv_file(ffi_cbv_dir)
+            if ffi_cbv_file is None:
+                logger.warning(
+                    "No CBV file found under %s for orbit %d cam %d ccd %d — "
+                    "FFI pixels will not be CBV-corrected for this CCD.",
+                    ffi_cbv_dir,
+                    args.orbit,
+                    camera,
+                    ccd,
+                )
+
         ffi(
             args.orbit,
             camera,
@@ -34,6 +51,7 @@ def make_cutouts_main(args: argparse.Namespace):
             produce_mask=False,
             nprocs=args.nprocs,
             replace=args.replace,
+            ffi_cbv_file=ffi_cbv_file,
         )
 
 
