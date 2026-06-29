@@ -14,7 +14,7 @@ import numpy as np
 from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
 from tglc.aperture_photometry import get_normalized_aperture_photometry
 from tglc.epsf import make_tglc_design_matrix
-from tglc.ffi import Source
+from tglc.ffi import FFICutout
 from tglc.utils.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
 from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
@@ -112,7 +112,7 @@ def get_cutout_for_light_curve(
 
 
 def generate_light_curves(
-    source: Source,
+    source: FFICutout,
     epsf: np.ndarray,
     psf_size: int,
     psf_oversample_factor: int,
@@ -123,8 +123,8 @@ def generate_light_curves(
 
     Parameters
     ----------
-    source : Source
-        Cutout `Source` object including flux data and positions of stars in the flux images.
+    source : FFICutout
+        Cutout including flux data and positions of stars in the flux images.
     epsf : array
         Best-fit PSF and background parameters, with shape `(t, k)`.
     psf_size : array

@@ -4,7 +4,6 @@ from importlib import resources
 from itertools import product
 import logging
 from pathlib import Path
-import pickle
 import warnings
 
 from astropy.coordinates import SkyCoord
@@ -20,6 +19,7 @@ from scipy import ndimage
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from tglc.io import write_cutout_fits
 from tglc.utils import data
 from tglc.utils.constants import get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
@@ -62,7 +62,7 @@ def background_mask(im=None):
     return cal_factor
 
 
-class Source:
+class FFICutout:
     def __init__(
         self,
         x=0,
@@ -81,9 +81,12 @@ class Source:
         cadence=None,
         gaia_catalog=None,
         tic_catalog=None,
+        cutout_x=-1,
+        cutout_y=-1,
     ):
         """
-        Source object that includes all data from TESS and Gaia DR2
+        FFI cutout with all data from TESS and Gaia DR2/DR3 relevant to the
+        bounded region.
         :param x: int, required
         starting horizontal pixel coordinate
         :param y: int, required
@@ -133,6 +136,8 @@ class Source:
         self.wcs = wcs
         self.ccd_x = x + 44
         self.ccd_y = y
+        self.cutout_x = cutout_x
+        self.cutout_y = cutout_y
 
         # Load catalog files and find relevant stars
         gaia_sky_coordinates = SkyCoord(gaia_catalog["ra"], gaia_catalog["dec"])
@@ -300,11 +305,9 @@ def _get_ffi_header_data_and_flux(
         return (0, 0, np.nan, np.full((2048, 2048), np.nan))
 
 
-def _make_source_and_write_pickle(
-    x_y: tuple[int, int], manifest: Manifest, replace: bool, **kwargs
-):
+def _make_cutout_and_write_fits(x_y: tuple[int, int], manifest: Manifest, replace: bool, **kwargs):
     """
-    Construct source object and write pickle file.
+    Construct an :class:`FFICutout` and write it to a FITS file.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
     unpacks coordinates from the first argument.
@@ -314,14 +317,15 @@ def _make_source_and_write_pickle(
     manifest.cutout_y = y
     if not replace and (manifest.source_file.is_file() and manifest.source_file.stat().st_size > 0):
         logger.debug(
-            f"Source file for camera {kwargs['camera']}, CCD {kwargs['ccd']}, {x}_{y} already exists, skipping"
+            f"Cutout file for camera {kwargs['camera']}, CCD {kwargs['ccd']}, {x}_{y} already exists, skipping"
         )
         return
     kwargs["x"] = x * (kwargs["size"] - 4)
     kwargs["y"] = y * (kwargs["size"] - 4)
-    source = Source(**kwargs)
-    with open(manifest.source_file, "wb") as output:
-        pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)
+    kwargs["cutout_x"] = x
+    kwargs["cutout_y"] = y
+    cutout = FFICutout(**kwargs)
+    write_cutout_fits(cutout, manifest.source_file)
 
 
 @jit(float32[:, :](float32[:, :, :]), nogil=True, parallel=True)
@@ -353,10 +357,10 @@ def ffi(
     replace: bool = False,
 ):
     """
-    Produce `Source` object pickle file from calibrated FFI files.
+    Produce :class:`FFICutout` FITS files from calibrated FFI files.
 
-    The `source/` directory is created for the given orbit/camera/CCD. If `produce_mask` is `True`,
-    the a mask file is created instead.
+    The ``source/`` directory is created for the given orbit/camera/CCD. If ``produce_mask`` is
+    ``True``, a mask file is created instead.
 
     Parameters
     ----------
@@ -375,7 +379,7 @@ def ffi(
     cutout_overlap : int
         Overlap between adjecent cutouts cutouts (pixels). Default = 2.
     produce_mask : bool
-        Produce CCD mask instead of making cutout `Source` objects.
+        Produce CCD mask instead of making cutout :class:`FFICutout` FITS files.
     nprocs : int
         Processes to use for in multiprocessing pool. Default = 1.
     replace : bool
@@ -486,10 +490,10 @@ def ffi(
     gaia_catalog = QTable.read(manifest.gaia_catalog_file)
     tic_catalog = QTable.read(manifest.tic_catalog_file)
 
-    logger.info(f"Writing cutout source pickle files to {manifest.source_directory.resolve()}")
+    logger.info(f"Writing cutout FITS files to {manifest.source_directory.resolve()}")
     manifest.source_directory.mkdir(exist_ok=True)
-    write_source_pickle_from_x_y = partial(
-        _make_source_and_write_pickle,
+    write_cutout_fits_from_x_y = partial(
+        _make_cutout_and_write_fits,
         manifest=manifest,
         replace=replace,
         flux=flux,
@@ -519,12 +523,21 @@ def ffi(
     # https://github.com/astropy/astropy/issues/16352
     consume_iterator_with_progress_bar(
         pool_map_if_multiprocessing(
-            write_source_pickle_from_x_y,
+            write_cutout_fits_from_x_y,
             cutouts,
             nprocs=1,  # TODO change to `nprocs=procs` when issue above is resolved
             pool_map_method="imap_unordered",
         ),
-        desc=f"Writing source pickle files for {camera}-{ccd}",
-        unit="source",
+        desc=f"Writing cutout FITS files for {camera}-{ccd}",
+        unit="cutout",
         total=len(cutouts),
     )
+
+
+Source = FFICutout
+"""Backwards-compat alias.
+
+Legacy pickle files written before the rename reference ``tglc.ffi.Source`` in
+their class metadata. Keeping this alias allows :func:`tglc.io.migrate_cutout_pickle`
+(and any direct ``pickle.load``) to deserialize those files into the new class.
+"""

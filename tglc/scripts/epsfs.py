@@ -9,13 +9,13 @@ from functools import partial
 import logging
 import multiprocessing
 from pathlib import Path
-import pickle
 import re
 
 import numpy as np
 
 from tglc.epsf import fit_epsf, make_tglc_design_matrix
-from tglc.ffi import Source
+from tglc.ffi import FFICutout
+from tglc.io import read_cutout_fits, write_epsf_fits
 from tglc.utils._optional_deps import HAS_CUPY
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def fit_epsf_for_source(
-    source: Source,
+    source: FFICutout,
     psf_size: int,
     oversample_factor: int,
     edge_compression_factor: float,
@@ -33,12 +33,12 @@ def fit_epsf_for_source(
     use_gpu: bool = True,
 ):
     """
-    Fit an ePSF for each cadence in a `Source` object.
+    Fit an ePSF for each cadence in an :class:`FFICutout`.
 
     Parameters
     ----------
-    source : Source
-        FFI cutout `Source` object with observed flux, star positions, and star brightnesses.
+    source : FFICutout
+        FFI cutout with observed flux, star positions, and star brightnesses.
     psf_size : int
         Side length of ePSF in pixels.
     oversample_factor : int
@@ -115,7 +115,8 @@ def read_source_and_fit_and_save_epsf(
     use_gpu: bool = True,
 ):
     """
-    Read a pickled `Source` object, fit an ePSF for each of its cadences, and save the results.
+    Read an :class:`FFICutout` FITS file, fit an ePSF for each of its cadences, and save the
+    results.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
     unpacks I/O file paths from first argument.
@@ -126,8 +127,7 @@ def read_source_and_fit_and_save_epsf(
     if not replace and epsf_output_file.is_file():
         logger.debug(f"ePSF file {epsf_output_file.resolve()} exists and will not be overwritten")
         return
-    with source_file.open("rb") as source_pickle:
-        source: Source = pickle.load(source_pickle)
+    source: FFICutout = read_cutout_fits(source_file)
 
     process_name = multiprocessing.current_process().name
     pool_worker_name_match = re.match(r".*PoolWorker-(\d+)", process_name)
@@ -167,7 +167,18 @@ def read_source_and_fit_and_save_epsf(
             flux_uncertainty_power,
             use_gpu=use_gpu,
         )
-    np.save(epsf_output_file, epsf)
+    write_epsf_fits(
+        epsf_output_file,
+        epsf,
+        psf_size=psf_size,
+        oversample=oversample_factor,
+        orbit=source.orbit,
+        sector=source.sector,
+        camera=source.camera,
+        ccd=source.ccd,
+        cutout_x=source.cutout_x,
+        cutout_y=source.cutout_y,
+    )
 
 
 def make_epsfs_main(args: argparse.Namespace):
@@ -181,7 +192,7 @@ def make_epsfs_main(args: argparse.Namespace):
     for camera, ccd in args.ccd:
         manifest.camera = camera
         manifest.ccd = ccd
-        ccd_source_files = list(manifest.source_directory.iterdir())
+        ccd_source_files = sorted(manifest.source_directory.glob("source_*.fits"))
         if args.cutout is not None:
             # Filter `ccd_source_files` by cutouts specified by user
             args_cutout_source_files = []
@@ -200,7 +211,7 @@ def make_epsfs_main(args: argparse.Namespace):
 
         manifest.epsf_directory.mkdir(exist_ok=True)
         ccd_epsf_files = [
-            manifest.epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
+            manifest.epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.fits"
             for source_file in ccd_source_files
         ]
 

@@ -8,11 +8,9 @@ import argparse
 from functools import partial
 import logging
 from pathlib import Path
-import pickle
 
-import numpy as np
-
-from tglc.ffi import Source
+from tglc.ffi import FFICutout
+from tglc.io import read_cutout_fits, read_epsf_fits
 from tglc.light_curve import generate_light_curves
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
@@ -30,15 +28,15 @@ def read_source_and_epsf_and_save_light_curves(
     tic_ids: list[int] | None = None,
 ):
     """
-    Read a pickled `Source` object and a numpy-saved ePSF, and extract and save light curves.
+    Read an :class:`FFICutout` FITS file and its matching ePSF FITS file, and extract and save
+    light curves.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
     unpacks I/O file paths from first argument.
     """
     source_file, epsf_file = source_and_epsf_files
-    with source_file.open("rb") as source_pickle:
-        source: Source = pickle.load(source_pickle)
-    epsf = np.load(epsf_file)
+    source: FFICutout = read_cutout_fits(source_file)
+    epsf, _epsf_metadata = read_epsf_fits(epsf_file)
     for light_curve in generate_light_curves(source, epsf, psf_size, oversample_factor, tic_ids):
         manifest.tic_id = light_curve.meta["tic_id"]
         if replace or not manifest.light_curve_file.is_file():
@@ -61,7 +59,7 @@ def make_light_curves_main(args: argparse.Namespace):
     for camera, ccd in args.ccd:
         manifest.camera = camera
         manifest.ccd = ccd
-        ccd_source_files = list(manifest.source_directory.iterdir())
+        ccd_source_files = sorted(manifest.source_directory.glob("source_*.fits"))
         if len(ccd_source_files) == 0:
             logger.warning(f"No cutout source files found for camera {camera} CCD {ccd}, skipping")
             continue
@@ -69,7 +67,7 @@ def make_light_curves_main(args: argparse.Namespace):
         ccd_source_and_epsf_files = []
         for source_file in ccd_source_files:
             epsf_file = (
-                manifest.epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.npy"
+                manifest.epsf_directory / f"epsf{source_file.stem.removeprefix('source')}.fits"
             )
             if epsf_file.is_file():
                 ccd_source_and_epsf_files.append((source_file, epsf_file))

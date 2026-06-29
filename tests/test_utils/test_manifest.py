@@ -91,13 +91,19 @@ def test_Manifest_kitchen_sink_properties():
     assert "source" in str(m.source_directory)
 
     assert isinstance(m.source_file, Path)
-    assert "source_1_1.pkl" in str(m.source_file)
+    assert "source_1_1.fits" in str(m.source_file)
+
+    assert isinstance(m.source_file_legacy_pkl, Path)
+    assert "source_1_1.pkl" in str(m.source_file_legacy_pkl)
 
     assert isinstance(m.epsf_directory, Path)
     assert "epsf" in str(m.epsf_directory)
 
     assert isinstance(m.epsf_file, Path)
-    assert "epsf_1_1.npy" in str(m.epsf_file)
+    assert "epsf_1_1.fits" in str(m.epsf_file)
+
+    assert isinstance(m.epsf_file_legacy_npy, Path)
+    assert "epsf_1_1.npy" in str(m.epsf_file_legacy_npy)
 
     assert isinstance(m.light_curve_directory, Path)
     assert "LC" in str(m.light_curve_directory)
