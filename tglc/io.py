@@ -57,6 +57,34 @@ def _atomic_write(hdul: fits.HDUList, path: Path) -> None:
     os.replace(tmp_path, path)
 
 
+def _convert_table_to_native_byteorder(table: Table) -> None:
+    """Rewrite numeric columns of ``table`` in native byte order, in place.
+
+    FITS stores numeric data as big-endian; on a little-endian host the
+    columns come back with dtype like ``'>f8'``. Numba (used in
+    ``tglc.epsf.make_tglc_design_matrix``) refuses non-native-byteorder
+    arrays, so we normalize here at the I/O boundary.
+    """
+    for name in list(table.colnames):
+        col = table[name]
+        dtype = col.dtype
+        if dtype.byteorder not in ("=", "|") and dtype.kind not in ("U", "S", "O"):
+            native = dtype.newbyteorder("=")
+            if isinstance(col, MaskedColumn):
+                table[name] = MaskedColumn(
+                    np.asarray(col.data, dtype=native),
+                    mask=col.mask,
+                    name=name,
+                    unit=col.unit,
+                )
+            else:
+                table[name] = Column(
+                    np.asarray(col, dtype=native),
+                    name=name,
+                    unit=col.unit,
+                )
+
+
 # ---------------------------------------------------------------------
 # FFI cutout I/O
 # ---------------------------------------------------------------------
@@ -153,9 +181,10 @@ def read_cutout_fits(path: Path) -> FFICutout:
         with fits.open(path) as hdul:
             primary_header = hdul[0].header
             flux_hdu = hdul["FLUX"]
-            # `.celestial` drops the cadence axis that astropy infers from
-            # NAXIS3 on the flux cube; the persisted WCS is 2D.
-            wcs = WCS(flux_hdu.header, relax=True).celestial
+            # naxis=2 keeps WCS construction 2D in spite of NAXIS3 on the cube.
+            # Without it, real TICA WCS headers (which carry SIP distortion)
+            # error out: SIP only supports 2-axis WCS.
+            wcs = WCS(flux_hdu.header, naxis=2, relax=True)
             flux = np.array(flux_hdu.data, dtype=np.float32)
             mask_data = np.array(hdul["MASK"].data, dtype=np.float32)
             badpix_data = np.array(hdul["BADPIX"].data, dtype=bool)
@@ -192,6 +221,8 @@ def read_cutout_fits(path: Path) -> FFICutout:
         if col_name in gaia_table.colnames and not isinstance(gaia_table[col_name], MaskedColumn):
             col_data = np.asarray(gaia_table[col_name])
             gaia_table[col_name] = MaskedColumn(col_data, mask=np.isnan(col_data), name=col_name)
+    _convert_table_to_native_byteorder(gaia_table)
+    _convert_table_to_native_byteorder(tic_table)
     cutout.gaia = gaia_table
     cutout.tic = tic_table
 
