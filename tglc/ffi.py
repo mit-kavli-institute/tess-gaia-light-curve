@@ -85,34 +85,50 @@ class FFICutout:
         cutout_y=-1,
     ):
         """
-        FFI cutout with all data from TESS and Gaia DR2/DR3 relevant to the
-        bounded region.
-        :param x: int, required
-        starting horizontal pixel coordinate
-        :param y: int, required
-        starting vertical pixel coordinate
-        :param flux: np.ndarray, required
-        3d data cube, the time series of a all FFI from a CCD
-        :param time: np.ndarray, required
-        1d array of time
-        :param wcs: astropy.wcs.wcs.WCS, required
-        WCS Keywords of the TESS FFI
-        :param orbit: int, required
-        TESS orbit number
-        :param sector: int, required
-        TESS sector number
-        :param size: int, optional
-        the side length in pixel  of TESScut image
-        :param camera: int, optional
-        camera number
-        :param ccd: int, optional
-        CCD number
-        :param cadence: list, required
-        list of cadences of TESS FFI
-        :param gaia_catalog: QTable, required
-        Gaia catalog data
-        :param tic_catalog: QTable, required
-        TIC catalog data
+        FFI cutout bundling a 3D image stack with the matching TIC and Gaia
+        catalog rows, derived star positions, and timing metadata.
+
+        Parameters
+        ----------
+        x, y : int
+            Starting pixel coordinates of the cutout within the CCD science
+            region. ``ccd_x`` is set to ``x + 44`` to account for the leading
+            buffer columns on the TESS CCD; ``ccd_y`` is set to ``y``.
+        flux : np.ndarray
+            3D ``(t, n_rows, n_cols)`` time series of FFI pixel values for the
+            whole CCD. The constructor slices it down to the cutout region.
+        time : np.ndarray
+            1D array of TJD timestamps, one per cadence.
+        wcs : astropy.wcs.WCS
+            WCS pulled from a good-quality FFI header for the CCD.
+        quality : np.ndarray
+            1D array of TESS quality flags, one per cadence.
+        mask : np.ma.MaskedArray
+            2D ``(n_rows, n_cols)`` mask for the whole CCD. ``.data`` carries
+            background-strap weights and ``.mask`` marks bad pixels.
+        exposure : int
+            Exposure time in seconds.
+        orbit : int
+            TESS orbit number.
+        sector : int
+            TESS sector number containing this orbit.
+        size : int
+            Side length of the cutout in pixels.
+        camera, ccd : int
+            TESS camera (1-4) and CCD (1-4) identifiers.
+        cadence : np.ndarray
+            1D array of TESS cadence numbers, one per timestamp.
+        gaia_catalog : astropy.table.QTable
+            Gaia catalog rows covering the CCD. Filtered to rows whose
+            projected position falls inside the cutout window.
+        tic_catalog : astropy.table.QTable
+            TESS Input Catalog rows covering the CCD. Filtered the same way
+            as ``gaia_catalog``.
+        cutout_x, cutout_y : int
+            Cutout grid indices used for matching this cutout to its ePSF on
+            disk. Default ``-1`` indicates "not set" (e.g., for tests that
+            construct an :class:`FFICutout` directly without going through
+            :func:`ffi`).
         """
         if cadence is None:
             cadence = []

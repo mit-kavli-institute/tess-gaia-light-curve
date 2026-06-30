@@ -49,7 +49,16 @@ The order matches the construction in :func:`tglc.epsf.make_tglc_design_matrix`.
 
 
 def _atomic_write(hdul: fits.HDUList, path: Path) -> None:
-    """Write a FITS HDUList atomically via a temporary file + os.replace."""
+    """Write a FITS HDUList atomically via a temporary file and ``os.replace``.
+
+    Parameters
+    ----------
+    hdul : astropy.io.fits.HDUList
+        HDUList to serialize.
+    path : pathlib.Path
+        Final destination path. A sibling ``<name>.tmp`` file is written first
+        and renamed into place once the write completes successfully.
+    """
     tmp_path = path.parent / (path.name + ".tmp")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", VerifyWarning)
@@ -61,9 +70,15 @@ def _convert_table_to_native_byteorder(table: Table) -> None:
     """Rewrite numeric columns of ``table`` in native byte order, in place.
 
     FITS stores numeric data as big-endian; on a little-endian host the
-    columns come back with dtype like ``'>f8'``. Numba (used in
-    ``tglc.epsf.make_tglc_design_matrix``) refuses non-native-byteorder
-    arrays, so we normalize here at the I/O boundary.
+    columns come back with dtypes like ``'>f8'``. Numba (used in
+    :func:`tglc.epsf.make_tglc_design_matrix`) refuses non-native-byteorder
+    arrays, so this normalizes at the I/O boundary.
+
+    Parameters
+    ----------
+    table : astropy.table.Table
+        Table whose numeric columns will be rewritten. String, byte, and
+        object columns are left untouched. Modified in place.
     """
     for name in list(table.colnames):
         col = table[name]
@@ -102,6 +117,17 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     * CADENCES -- BINTABLE of co-indexed ``time``, ``cadence``, ``quality``
     * GAIA -- BINTABLE of the gaia catalog
     * TIC -- BINTABLE of the TIC <-> Gaia DR3 crossmatch
+
+    Parameters
+    ----------
+    cutout : tglc.ffi.FFICutout
+        Cutout object to serialize. All persisted attributes
+        (``orbit``/``sector``/``camera``/``ccd``/``size``/``ccd_x``/``ccd_y``/
+        ``exposure``/``cutout_x``/``cutout_y``/``wcs``/``flux``/``mask``/
+        ``time``/``cadence``/``quality``/``gaia``/``tic``) are read from it.
+    path : pathlib.Path
+        Output FITS file path. The file is written atomically via
+        :func:`_atomic_write`.
     """
     path = Path(path)
 
@@ -168,7 +194,27 @@ def read_cutout_fits(path: Path) -> FFICutout:
 
     Reconstructs the object without invoking ``FFICutout.__init__``, which
     performs catalog cross-matching and would discard the persisted state.
-    Raises if the WCS header cannot be parsed.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to a FITS file produced by :func:`write_cutout_fits`.
+
+    Returns
+    -------
+    cutout : tglc.ffi.FFICutout
+        Reconstructed cutout with all persisted attributes populated. Table
+        columns are converted to native byte order; ``gaia['designation']``
+        is decoded to ``str``; ``gaia['pmra']`` and ``gaia['pmdec']`` are
+        promoted back to :class:`astropy.table.MaskedColumn` if astropy
+        returned them as plain :class:`Column`.
+
+    Raises
+    ------
+    Exception
+        Propagates any error raised by :class:`astropy.wcs.WCS` if the
+        persisted WCS header cannot be parsed. Per the issue #1 design,
+        WCS parse failures are not silently swallowed.
     """
     from tglc.ffi import FFICutout  # local import: breaks the ffi <-> io cycle
 
@@ -254,6 +300,29 @@ def write_epsf_fits(
     background columns at ``epsf[:, -n_background:]`` follow the fixed order
     in :data:`EPSF_BACKGROUND_COLUMNS`, also recorded in ``BGCOL*`` header
     keywords for self-description.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Output FITS file path. The file is written atomically via
+        :func:`_atomic_write`.
+    epsf : np.ndarray
+        2D ``(t, k)`` array of best-fit ePSF + background parameters, as
+        returned by :func:`tglc.epsf.fit_epsf`. Coerced to ``float64`` on
+        write.
+    psf_size : int
+        Side length in pixels of the square PSF model.
+    oversample : int
+        Factor by which the PSF was oversampled relative to image pixels.
+    orbit, sector, camera, ccd : int
+        TESS identifiers for the cutout this ePSF was fit for. Used to
+        match the file back to its originating :class:`FFICutout`.
+    cutout_x, cutout_y : int
+        Cutout grid indices matching :attr:`FFICutout.cutout_x` /
+        :attr:`FFICutout.cutout_y` on the originating cutout.
+    n_background : int, optional
+        Number of background-parameter columns appended after the ePSF
+        parameters. Defaults to ``len(EPSF_BACKGROUND_COLUMNS)`` (i.e. 6).
     """
     path = Path(path)
 
@@ -275,7 +344,24 @@ def write_epsf_fits(
 
 
 def read_epsf_fits(path: Path) -> tuple[np.ndarray, dict]:
-    """Read an ePSF parameter array and its metadata from a FITS file."""
+    """Read an ePSF parameter array and its metadata from a FITS file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to a FITS file produced by :func:`write_epsf_fits`.
+
+    Returns
+    -------
+    epsf : np.ndarray
+        2D ``(t, k)`` float64 array of best-fit ePSF and background
+        parameters.
+    metadata : dict
+        Header values keyed by ``psf_size``, ``oversample``,
+        ``n_background``, ``orbit``, ``sector``, ``camera``, ``ccd``,
+        ``cutout_x``, ``cutout_y``, and ``background_columns`` (a tuple of
+        background-column names of length ``n_background``).
+    """
     path = Path(path)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FITSFixedWarning)
@@ -320,7 +406,24 @@ def migrate_cutout_pickle(
     is readable, and optionally removes the original pickle. The original is
     only deleted after a successful round-trip read of the new FITS file.
 
-    Returns the path to the written FITS file.
+    Parameters
+    ----------
+    pkl_path : pathlib.Path
+        Path to the legacy ``.pkl`` file produced by older versions of TGLC.
+        Pickles referencing ``tglc.ffi.Source`` still load thanks to the
+        backwards-compat alias kept at the end of :mod:`tglc.ffi`.
+    fits_path : pathlib.Path, optional
+        Output FITS file path. Defaults to ``pkl_path`` with the ``.fits``
+        suffix.
+    delete_original : bool, optional
+        If ``True``, remove ``pkl_path`` after the new FITS file has been
+        verified readable. Defaults to ``False`` so the legacy file is
+        retained unless the caller explicitly opts in.
+
+    Returns
+    -------
+    fits_path : pathlib.Path
+        Path to the written FITS file.
     """
     pkl_path = Path(pkl_path)
     fits_path = Path(fits_path) if fits_path is not None else _default_fits_path(pkl_path)
@@ -358,7 +461,31 @@ def migrate_epsf_npy(
     (e.g., orbit/camera/ccd from the directory layout, ``psf_size`` and
     ``oversample`` from the originating ePSF fit configuration).
 
-    Returns the path to the written FITS file.
+    Parameters
+    ----------
+    npy_path : pathlib.Path
+        Path to the legacy ``.npy`` file produced by older versions of TGLC.
+    fits_path : pathlib.Path, optional
+        Output FITS file path. Defaults to ``npy_path`` with the ``.fits``
+        suffix.
+    psf_size : int
+        Side length in pixels of the square PSF model the ePSF was fit
+        against. Used to populate the FITS header.
+    oversample : int
+        Factor by which the PSF was oversampled relative to image pixels.
+    orbit, sector, camera, ccd : int
+        TESS identifiers for the originating cutout.
+    cutout_x, cutout_y : int
+        Cutout grid indices matching the originating
+        :class:`FFICutout`'s persisted ``cutout_x`` / ``cutout_y``.
+    delete_original : bool, optional
+        If ``True``, remove ``npy_path`` after the new FITS file has been
+        verified readable. Defaults to ``False``.
+
+    Returns
+    -------
+    fits_path : pathlib.Path
+        Path to the written FITS file.
     """
     npy_path = Path(npy_path)
     fits_path = Path(fits_path) if fits_path is not None else _default_fits_path(npy_path)
