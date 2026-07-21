@@ -26,6 +26,7 @@ def read_source_and_epsf_and_save_light_curves(
     psf_size: int,
     oversample_factor: int,
     tic_ids: list[int] | None = None,
+    apertures: list[str] | None = None,
 ):
     """
     Read an :class:`FFICutout` FITS file and its matching ePSF FITS file, and extract and save
@@ -37,7 +38,9 @@ def read_source_and_epsf_and_save_light_curves(
     source_file, epsf_file = source_and_epsf_files
     source: FFICutout = read_cutout_fits(source_file)
     epsf, _epsf_metadata = read_epsf_fits(epsf_file)
-    for light_curve in generate_light_curves(source, epsf, psf_size, oversample_factor, tic_ids):
+    for light_curve in generate_light_curves(
+        source, epsf, psf_size, oversample_factor, tic_ids, apertures
+    ):
         manifest.tic_id = light_curve.meta["tic_id"]
         if replace or not manifest.light_curve_file.is_file():
             light_curve.write_hdf5(manifest.light_curve_file)
@@ -92,6 +95,7 @@ def make_light_curves_main(args: argparse.Namespace):
             psf_size=args.psf_size,
             oversample_factor=args.oversample,
             tic_ids=args.tic,
+            apertures=args.apertures,
         )
         consume_iterator_with_progress_bar(
             pool_map_if_multiprocessing(

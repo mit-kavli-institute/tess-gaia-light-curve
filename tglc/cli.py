@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from tglc import __version__ as tglc_version
+from tglc.apertures import APERTURE_NAMES
 
 
 # Default value for --tglc-data-dir command line argument
@@ -164,6 +165,13 @@ def parse_tglc_args() -> argparse.Namespace:
         action="store_true",
         help="Do not use GPUs to fit ePSFs (ignored if cupy not installed or GPUs not available)",
     )
+    all_parser.add_argument(
+        "--apertures",
+        nargs="+",
+        choices=list(APERTURE_NAMES),
+        default=list(APERTURE_NAMES),
+        help="Apertures to include in output light curves. Default: all apertures.",
+    )
 
     catalogs_parser = tglc_commands.add_parser(
         "catalogs",
@@ -256,12 +264,22 @@ def parse_tglc_args() -> argparse.Namespace:
         default=2,
         help="Factor used to oversample the PSF compared to image pixels. Default=2.",
     )
+    lightcurves_parser.add_argument(
+        "--apertures",
+        nargs="+",
+        choices=list(APERTURE_NAMES),
+        default=list(APERTURE_NAMES),
+        help="Apertures to include in output light curves. Default: all apertures.",
+    )
 
     args = tglc_parser.parse_args()
 
     # Custom post-parsing logic
     if args.ccd is None:
         args.ccd = [(camera, ccd) for camera in range(1, 5) for ccd in range(1, 5)]
+    if args.tglc_command in ("lightcurves", "all"):
+        # Normalize apertures to canonical order and remove duplicates
+        args.apertures = [name for name in APERTURE_NAMES if name in set(args.apertures)]
     if args.tglc_command == "all":
         # Making only TIC or only Gaia catalogs doesn't make sense for the "all" command, but the
         # catalogs script expects `args` to have `tic_only` and `gaia_only` attributes.
