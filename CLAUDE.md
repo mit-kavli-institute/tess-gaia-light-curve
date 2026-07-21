@@ -45,8 +45,14 @@ orbit-<orbit>/ffi/
     ffi/    <— place TICA FFI .fits files here before running (not downloaded by TGLC)
     source/source_<x>_<y>.fits      (FFICutout MEF: PRIMARY/FLUX/MASK/BADPIX/CADENCES/GAIA/TIC)
     epsf/epsf_<x>_<y>.fits          (fitted ePSF + metadata in header)
-    LC/<tic_id>.h5                  (light curves)
+    LC/0/000/012/345/678/<tic_id>.h5   (light curves, sharded — see below)
 ```
+
+Light curves are sharded to avoid huge flat directories: the TIC ID is zero-padded to 16
+digits and the first 13 digits are split into 1+3+3+3+3-digit directory components
+(`tglc/utils/manifest.py:get_tic_id_shard_path`), keeping every directory level at ≤1000
+entries. The filename keeps the unpadded TIC ID, e.g. TIC 12345678901 →
+`LC/0/000/012/345/678/12345678901.h5`.
 
 The cutout and ePSF intermediate products migrated from pickle/`.npy` to FITS
 in issue #1. `tglc/io.py` exposes `write_cutout_fits`/`read_cutout_fits` and

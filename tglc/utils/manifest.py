@@ -8,6 +8,31 @@ from pathlib import Path
 from tglc.utils.constants import get_orbits_in_sector, get_sector_containing_orbit
 
 
+def get_tic_id_shard_path(tic_id: int) -> Path:
+    """
+    Relative shard directory for a light curve file, derived from the TIC ID.
+
+    The TIC ID is zero-padded to 16 digits and the first 13 digits are split into
+    1+3+3+3+3-digit directory components, e.g. ``12345678901`` ->
+    ``Path("0/000/012/345/678")``. The last 3 digits vary within a leaf directory, keeping
+    every directory level at <=1000 entries.
+
+    Parameters
+    ----------
+    tic_id : int
+        TESS Input Catalog ID. Must be a non-negative integer below 10^16.
+
+    Returns
+    -------
+    shard_path : Path
+        Relative directory path with 5 components.
+    """
+    if not 0 <= tic_id < 10**16:
+        raise ValueError(f"TIC ID must be a non-negative integer below 10^16, got {tic_id}")
+    padded = f"{tic_id:016d}"
+    return Path(padded[0], padded[1:4], padded[4:7], padded[7:10], padded[10:13])
+
+
 @dataclass
 class Manifest:
     """This class manages/specifies the file structure that TGLC expects."""
@@ -154,5 +179,5 @@ class Manifest:
 
     @property
     def light_curve_file(self) -> Path:
-        """Light curve in HDF5 format."""
-        return self.light_curve_directory / f"{self.tic_id}.h5"
+        """Light curve in HDF5 format, sharded by zero-padded TIC ID."""
+        return self.light_curve_directory / get_tic_id_shard_path(self.tic_id) / f"{self.tic_id}.h5"

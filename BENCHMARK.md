@@ -84,6 +84,14 @@ grep 'event=cutout_light_curves' bench.log \
     | sed -E 's/.* peak_rss_mb=([0-9.]+).*/\1/' | sort -n | tail -1
 ```
 
+Light curve files are written to a sharded directory tree (TIC ID zero-padded to 16 digits,
+first 13 digits split 1+3+3+3+3 into subdirectories, ≤1000 entries per directory), e.g.
+`LC/0/000/012/345/678/12345678901.h5` — so count outputs recursively:
+
+```shell
+find orbit-<N>/ffi/cam<C>/ccd<D>/LC -name '*.h5' | wc -l
+```
+
 ### Metric semantics
 
 - **Peak RSS is a lifetime high-water mark**, not a per-step delta: per-step `peak_rss_mb` values

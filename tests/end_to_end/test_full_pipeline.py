@@ -15,6 +15,7 @@ import pytest
 
 from tglc.__main__ import tglc_main
 from tglc.io import read_cutout_fits, read_epsf_fits
+from tglc.utils.manifest import get_tic_id_shard_path
 
 
 TEST_ORBIT = 185
@@ -187,9 +188,12 @@ def test_full_pipeline_with_commands(
         tglc_main()
 
     lc_directory = ccd_directory / "LC"
-    lc_files = list(lc_directory.iterdir())
+    lc_files = sorted(lc_directory.rglob("*.h5"))
     assert len(lc_files) > 0
+    # Light curves should be sharded by zero-padded TIC ID, not flat in the LC root
+    assert not any(path.suffix == ".h5" for path in lc_directory.iterdir())
     for lc_file in lc_files:
+        assert lc_file.parent == lc_directory / get_tic_id_shard_path(int(lc_file.stem))
         with h5py.File(lc_file) as lc_data:
             assert "LightCurve" in lc_data.keys()
             assert sorted(lc_data["LightCurve/AperturePhotometry"].keys()) == [
@@ -221,7 +225,7 @@ def test_full_pipeline_with_commands(
         )
         tglc_main()
 
-    lc_files = list(lc_directory.iterdir())
+    lc_files = sorted(lc_directory.rglob("*.h5"))
     assert len(lc_files) > 0
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:
@@ -276,7 +280,7 @@ def test_full_pipeline_with_all(
         read_epsf_fits(epsf_file)
 
     lc_directory = ccd_directory / "LC"
-    lc_files = list(lc_directory.iterdir())
+    lc_files = sorted(lc_directory.rglob("*.h5"))
     assert len(lc_files) > 0
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:
@@ -369,7 +373,7 @@ def test_full_pipeline_after_migration(
         )
         tglc_main()
 
-    lc_files = list((ccd_directory / "LC").iterdir())
+    lc_files = sorted((ccd_directory / "LC").rglob("*.h5"))
     assert len(lc_files) > 0
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:

@@ -3,7 +3,28 @@ from pathlib import Path
 
 import pytest
 
-from tglc.utils.manifest import Manifest
+from tglc.utils.manifest import Manifest, get_tic_id_shard_path
+
+
+@pytest.mark.parametrize(
+    "tic_id,expected",
+    [
+        (12345678901, Path("0/000/012/345/678")),
+        (0, Path("0/000/000/000/000")),
+        (1, Path("0/000/000/000/000")),
+        (999, Path("0/000/000/000/000")),
+        (1000, Path("0/000/000/000/001")),
+        (9999999999999999, Path("9/999/999/999/999")),
+    ],
+)
+def test_get_tic_id_shard_path(tic_id: int, expected: Path):
+    assert get_tic_id_shard_path(tic_id) == expected
+
+
+@pytest.mark.parametrize("tic_id", [-1, 10**16])
+def test_get_tic_id_shard_path_rejects_out_of_range_ids(tic_id: int):
+    with pytest.raises(ValueError, match="TIC ID"):
+        get_tic_id_shard_path(tic_id)
 
 
 def test_Manifest():
@@ -109,4 +130,4 @@ def test_Manifest_kitchen_sink_properties():
     assert "LC" in str(m.light_curve_directory)
 
     assert isinstance(m.light_curve_file, Path)
-    assert "1.h5" in str(m.light_curve_file)
+    assert str(m.light_curve_file).endswith("LC/0/000/000/000/000/1.h5")

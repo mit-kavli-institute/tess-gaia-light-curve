@@ -49,6 +49,7 @@ def read_source_and_epsf_and_save_light_curves(
     ):
         manifest.tic_id = light_curve.meta["tic_id"]
         if replace or not manifest.light_curve_file.is_file():
+            manifest.light_curve_file.parent.mkdir(parents=True, exist_ok=True)
             light_curve.write_hdf5(manifest.light_curve_file)
         else:
             logger.debug(
