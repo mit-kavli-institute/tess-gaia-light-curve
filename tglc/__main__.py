@@ -6,6 +6,7 @@ import os
 
 from tglc import __version__ as tglc_version
 from tglc.cli import parse_tglc_args
+from tglc.utils.benchmark import benchmark_step
 from tglc.utils.logging import setup_logging
 
 
@@ -45,19 +46,23 @@ def tglc_main():
     if args.tglc_command == "catalogs":
         from tglc.scripts.catalogs import make_catalog_main
 
-        make_catalog_main(args)
+        with benchmark_step("catalogs"):
+            make_catalog_main(args)
     elif args.tglc_command == "cutouts":
         from tglc.scripts.cutouts import make_cutouts_main
 
-        make_cutouts_main(args)
+        with benchmark_step("cutouts"):
+            make_cutouts_main(args)
     elif args.tglc_command == "epsfs":
         from tglc.scripts.epsfs import make_epsfs_main
 
-        make_epsfs_main(args)
+        with benchmark_step("epsfs"):
+            make_epsfs_main(args)
     elif args.tglc_command == "lightcurves":
         from tglc.scripts.light_curves import make_light_curves_main
 
-        make_light_curves_main(args)
+        with benchmark_step("lightcurves"):
+            make_light_curves_main(args)
     elif args.tglc_command == "all":
 
         def log_heading(msg: str):
@@ -71,37 +76,42 @@ def tglc_main():
 
         log_heading("Running all TGLC scripts")
 
-        from tglc.scripts.catalogs import make_catalog_main
+        with benchmark_step("all"):
+            from tglc.scripts.catalogs import make_catalog_main
 
-        log_heading("Creating catalogs")
-        make_catalog_main(args)
+            log_heading("Creating catalogs")
+            with benchmark_step("catalogs"):
+                make_catalog_main(args)
 
-        from tglc.scripts.cutouts import make_cutouts_main
+            from tglc.scripts.cutouts import make_cutouts_main
 
-        log_heading("Making FFI cutouts")
-        make_cutouts_main(args)
+            log_heading("Making FFI cutouts")
+            with benchmark_step("cutouts"):
+                make_cutouts_main(args)
 
-        from tglc.scripts.epsfs import make_epsfs_main
+            from tglc.scripts.epsfs import make_epsfs_main
 
-        log_heading("Fitting ePSFs")
-        # Don't allow more GPU workers than CUDA devices
-        old_nprocs = args.nprocs
-        from tglc.utils._optional_deps import HAS_CUPY
+            log_heading("Fitting ePSFs")
+            # Don't allow more GPU workers than CUDA devices
+            old_nprocs = args.nprocs
+            from tglc.utils._optional_deps import HAS_CUPY
 
-        if HAS_CUPY:
-            import cupy
+            if HAS_CUPY:
+                import cupy
 
-            num_cuda_devices = cupy.cuda.runtime.getDeviceCount()
-            args.nprocs = min(args.nprocs, num_cuda_devices)
+                num_cuda_devices = cupy.cuda.runtime.getDeviceCount()
+                args.nprocs = min(args.nprocs, num_cuda_devices)
 
-        make_epsfs_main(args)
+            with benchmark_step("epsfs"):
+                make_epsfs_main(args)
 
-        args.nprocs = old_nprocs
+            args.nprocs = old_nprocs
 
-        from tglc.scripts.light_curves import make_light_curves_main
+            from tglc.scripts.light_curves import make_light_curves_main
 
-        log_heading("Extracting light curves")
-        make_light_curves_main(args)
+            log_heading("Extracting light curves")
+            with benchmark_step("lightcurves"):
+                make_light_curves_main(args)
 
     else:
         raise ValueError(f"Unrecognized TGLC command: {args.tglc_command}")

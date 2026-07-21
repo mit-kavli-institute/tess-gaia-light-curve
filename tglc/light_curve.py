@@ -1,6 +1,6 @@
 """Light curve extraction functionality."""
 
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 import logging
 from math import ceil, floor
 
@@ -13,6 +13,7 @@ import numpy as np
 
 from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
 from tglc.aperture_photometry import get_normalized_aperture_photometry
+from tglc.apertures import APERTURE_NAMES, APERTURE_SIZES
 from tglc.epsf import make_tglc_design_matrix
 from tglc.ffi import FFICutout
 from tglc.utils.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
@@ -117,6 +118,7 @@ def generate_light_curves(
     psf_size: int,
     psf_oversample_factor: int,
     tic_ids: list[int] | None = None,
+    apertures: Sequence[str] | None = None,
 ) -> Generator[ApertureLightCurve, None, None]:
     """
     Generator function that yields aperture light curves extracted from the source cutout.
@@ -132,17 +134,20 @@ def generate_light_curves(
     psf_oversample_factor : int
         Factor by which to oversample the PSF compared to image pixels. Used to construct design
         matrices.
-    max_magnitude : float
-        Maximum magnitude of target stars for which light curves should be extracted.
     tic_ids : list[int] | None
         Optional list of TIC IDs that should have light curves made. If specified, all other targets
         will be ignored. By default, all targets in the source TIC catalog have light curves made.
+    apertures : Sequence[str] | None
+        Names of apertures (from `tglc.apertures.APERTURE_NAMES`) to include in the light curves.
+        By default, all apertures are included.
 
     Yields
     ------
     light_curve : ApertureLightCurve
         Aperture light curves extracted from the source cutout with the ePSF parameters given.
     """
+    if apertures is None:
+        apertures = list(APERTURE_NAMES)
     tic_match_table = source.tic
     if tic_ids is not None:
         tic_match_table = tic_match_table[np.isin(tic_match_table["TIC"], tic_ids)]
@@ -214,7 +219,7 @@ def generate_light_curves(
             get_normalized_aperture_photometry(
                 light_curve_cutout,
                 np.array(source.quality) | high_background_points,
-                aperture_size,
+                APERTURE_SIZES[aperture_name],
                 round(star_x),
                 round(star_y),
                 source.gaia["tess_mag"][i],
@@ -222,11 +227,9 @@ def generate_light_curves(
                 psf_portions,
                 column_name_prefix=f"{aperture_name}_aperture_",
             )
-            for aperture_name, aperture_size in [("primary", 3), ("small", 1), ("large", 5)]
+            for aperture_name in apertures
         ]
-        for aperture_name, table in zip(
-            ["primary", "small", "large"], aperture_photometry_data, strict=False
-        ):
+        for aperture_name, table in zip(apertures, aperture_photometry_data, strict=True):
             table[f"{aperture_name}_aperture_centroid_x"] += (
                 source.ccd_x + nearest_pixel_x[i] - star_x
             ) * u.pixel
@@ -243,6 +246,12 @@ def generate_light_curves(
         target_ccd_x = star_positions[i][0] + source.ccd_x
         target_ccd_y = star_positions[i][1] + source.ccd_y
 
+        local_backgrounds = {
+            f"{aperture_name}_aperture_local_background": table.meta[
+                f"{aperture_name}_aperture_local_background"
+            ]
+            for aperture_name, table in zip(apertures, aperture_photometry_data, strict=True)
+        }
         light_curve_meta = ApertureLightCurveMetadata(
             tic_id=tic_id,
             orbit=source.orbit,
@@ -254,15 +263,7 @@ def generate_light_curves(
             sky_coord=sky_coord,
             tess_magnitude=source.gaia["tess_mag"][i],
             exposure_time=source.exposure * u.second,
-            primary_aperture_local_background=aperture_photometry_data[0].meta[
-                "primary_aperture_local_background"
-            ],
-            small_aperture_local_background=aperture_photometry_data[1].meta[
-                "small_aperture_local_background"
-            ],
-            large_aperture_local_background=aperture_photometry_data[2].meta[
-                "large_aperture_local_background"
-            ],
+            **local_backgrounds,
         )
 
         base_light_curve = QTable(
@@ -276,6 +277,8 @@ def generate_light_curves(
         )
 
         light_curve = ApertureLightCurve(
-            hstack(aperture_photometry_data + [base_light_curve]), meta=light_curve_meta
+            hstack(aperture_photometry_data + [base_light_curve]),
+            meta=light_curve_meta,
+            apertures=apertures,
         )
         yield light_curve

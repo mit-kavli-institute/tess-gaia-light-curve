@@ -192,6 +192,40 @@ def test_full_pipeline_with_commands(
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:
             assert "LightCurve" in lc_data.keys()
+            assert sorted(lc_data["LightCurve/AperturePhotometry"].keys()) == [
+                "LargeAperture",
+                "PrimaryAperture",
+                "SmallAperture",
+            ]
+
+    # Re-running with a restricted aperture selection should only produce the selected apertures
+    with monkeypatch.context() as m:
+        m.setattr(
+            sys,
+            "argv",
+            [
+                "tglc",
+                "lightcurves",
+                "--tglc-data-dir",
+                str(tmp_path.resolve()),
+                "--orbit",
+                str(TEST_ORBIT),
+                "--ccd",
+                "1,1",
+                "--cutout",
+                "0,0",
+                "--apertures",
+                "primary",
+                "--replace",
+            ],
+        )
+        tglc_main()
+
+    lc_files = list(lc_directory.iterdir())
+    assert len(lc_files) > 0
+    for lc_file in lc_files:
+        with h5py.File(lc_file) as lc_data:
+            assert list(lc_data["LightCurve/AperturePhotometry"].keys()) == ["PrimaryAperture"]
 
 
 def test_full_pipeline_with_all(
