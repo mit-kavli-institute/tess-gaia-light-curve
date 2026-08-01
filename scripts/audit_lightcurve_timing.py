@@ -810,7 +810,7 @@ def run_report(args: argparse.Namespace) -> None:
 
 def make_synthetic_lightcurve(
     output_file: Path, tic_id: int, orbit: int, sector: int, ra: float, dec: float,
-    tjd: np.ndarray,
+    tjd: np.ndarray, cadence: np.ndarray | None = None, camera: int = 1, ccd: int = 1,
 ) -> None:  # fmt: skip
     """Write a minimal but schema-complete light curve H5 using the production writer."""
     from astropy.coordinates import SkyCoord
@@ -818,7 +818,9 @@ def make_synthetic_lightcurve(
     from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
 
     n = len(tjd)
-    columns = {"cadence": np.arange(n), "quality_flag": np.zeros(n, dtype=int),
+    if cadence is None:
+        cadence = np.arange(n)
+    columns = {"cadence": cadence, "quality_flag": np.zeros(n, dtype=int),
                "background_flux": np.ones(n)}  # fmt: skip
     for aperture in ["primary", "small", "large"]:
         columns[f"{aperture}_aperture_magnitude"] = np.full(n, 10.0) + np.random.default_rng(
@@ -827,7 +829,8 @@ def make_synthetic_lightcurve(
         columns[f"{aperture}_aperture_centroid_x"] = np.full(n, 2.0)
         columns[f"{aperture}_aperture_centroid_y"] = np.full(n, 2.0)
     metadata = ApertureLightCurveMetadata(
-        tic_id=tic_id, orbit=orbit, sector=sector, camera=1, ccd=1, ccd_x=100.0, ccd_y=100.0,
+        tic_id=tic_id, orbit=orbit, sector=sector, camera=camera, ccd=ccd,
+        ccd_x=100.0, ccd_y=100.0,
         sky_coord=SkyCoord(ra, dec, unit="deg"), tess_magnitude=10.0,
         exposure_time=200 * u.second,
         primary_aperture_local_background=0 * u.electron,
