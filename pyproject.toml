@@ -21,6 +21,7 @@ dependencies = [
   "numba",
   "numpy",
   "pandas",
+  "requests",
   "scipy",
   "tesswcs",
   "tqdm",
@@ -47,7 +48,10 @@ include = ["tglc", "tglc.*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
+addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config", "-m", "not network"]
+markers = [
+  "network: tests that contact the real JPL Horizons API; deselected by default, run with `pytest -m network`",
+]
 xfail_strict = true
 filterwarnings = ["error"]
 log_cli_level = "INFO"

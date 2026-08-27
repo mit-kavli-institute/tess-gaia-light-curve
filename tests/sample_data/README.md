@@ -4,6 +4,24 @@ Testing TGLC, especially end-to-end tests that run high-level commands, requires
 
 Orbit 185 (sector 89), camera 1, CCD 1, cutout (0, 0) was chosen for sample data. There is no particular reason for this aside from the fact that sector 89 was used for initial testing of the pipeline, so there were data products to copy. The information in this document and the sample databases readme should be enough to set up new sample data if it ever becomes necessary or desirable.
 
+## Spacecraft Ephemerides
+
+Light curve generation applies a barycentric time correction using the TESS spacecraft position, which the pipeline fetches on demand from the [JPL Horizons API](https://ssd.jpl.nasa.gov/api/horizons.api) and caches per orbit under `{tglc-data-dir}/ephemerides/`. To keep tests offline, [ephemerides/](./ephemerides/) contains a pre-generated cache file for the sample orbit that the end-to-end tests copy into the temporary data directory.
+
+To regenerate the file (or create one for a different sample orbit), fetch the ephemeris covering the sample FFI time span (padded by at least 2 days on each side) into a scratch directory using the pipeline's own fetch code, then copy it here:
+
+```python
+from pathlib import Path
+from astropy.time import Time
+from tglc.utils.tess_ephemeris import get_spacecraft_ephemeris
+
+start = Time(2460720.5, format="jd", scale="tdb")  # sample FFIs are near JD 2460722.83
+stop = Time(2460725.5, format="jd", scale="tdb")
+get_spacecraft_ephemeris(185, start, stop, Path("tests/sample_data/ephemerides"))
+```
+
+The Horizons query settings are documented in the `tglc.utils.tess_ephemeris` module docstring.
+
 ## FFI Download Setup
 
 Once downloaded, FFIs are stored in the [ffi/](./ffi/) subdirectory of this sample data directory. The files need to be fetched and preprocessed ahead of time because [pooch](https://www.fatiando.org/pooch/latest/index.html) needs file hashes to check. The process is outlined here:

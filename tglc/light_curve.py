@@ -3,6 +3,7 @@
 from collections.abc import Generator
 import logging
 from math import ceil, floor
+from pathlib import Path
 
 from astropy.coordinates import SkyCoord
 from astropy.stats import mad_std
@@ -116,6 +117,7 @@ def generate_light_curves(
     epsf: np.ndarray,
     psf_size: int,
     psf_oversample_factor: int,
+    ephemerides_directory: Path,
     tic_ids: list[int] | None = None,
 ) -> Generator[ApertureLightCurve, None, None]:
     """
@@ -132,8 +134,9 @@ def generate_light_curves(
     psf_oversample_factor : int
         Factor by which to oversample the PSF compared to image pixels. Used to construct design
         matrices.
-    max_magnitude : float
-        Maximum magnitude of target stars for which light curves should be extracted.
+    ephemerides_directory : Path
+        Directory containing cached TESS spacecraft ephemeris files, used for barycentric time
+        corrections.
     tic_ids : list[int] | None
         Optional list of TIC IDs that should have light curves made. If specified, all other targets
         will be ignored. By default, all targets in the source TIC catalog have light curves made.
@@ -173,7 +176,9 @@ def generate_light_curves(
     # These are used for all light curves
     model_background = np.dot(design_matrix[:, -6:], epsf[:, -6:].T).T.reshape(source.flux.shape)
     time = Time(source.time, format="tjd", scale="tdb")
-    tess_spacecraft_position = get_tess_spacecraft_position(source.sector, time)
+    tess_spacecraft_position = get_tess_spacecraft_position(
+        source.orbit, time, ephemerides_directory
+    )
 
     nearest_pixel_x = np.round(source.gaia[f"sector_{source.sector}_x"]).astype(int)
     nearest_pixel_y = np.round(source.gaia[f"sector_{source.sector}_y"]).astype(int)
