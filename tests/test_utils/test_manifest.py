@@ -47,6 +47,11 @@ def test_Manifest_no_error_for_non_null_attribute():
     m.orbit_directory
 
 
+def test_Manifest_ephemerides_directory_requires_only_data_dir():
+    m = Manifest(Path("/tglc-data"))
+    assert m.ephemerides_directory == Path("/tglc-data/ephemerides")
+
+
 def test_Manifest_kitchen_sink_properties():
     m = Manifest(
         Path("/tglc-data"),
@@ -58,6 +63,9 @@ def test_Manifest_kitchen_sink_properties():
         cutout_x=1,
         cutout_y=1,
     )
+
+    assert isinstance(m.ephemerides_directory, Path)
+    assert "ephemerides" in str(m.ephemerides_directory)
 
     assert isinstance(m.orbit_directory, Path)
     assert "orbit-9/ffi" in str(m.orbit_directory)

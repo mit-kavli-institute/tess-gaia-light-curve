@@ -16,6 +16,8 @@ import pytest
 from tglc.__main__ import tglc_main
 from tglc.io import read_cutout_fits, read_epsf_fits
 
+from ..sample_data import SAMPLE_DATA_DIRECTORY
+
 
 TEST_ORBIT = 185
 """The orbit used for testing purposes. Chosen arbitrarily because it was one of the orbits used
@@ -40,6 +42,14 @@ def tmp_orbit_directory(tmp_path: Path, sample_ffis: Path) -> Path:
             camera = cam_ccd_match.group(1)
             ccd = cam_ccd_match.group(2)
             shutil.copy(file, orbit_directory / f"cam{camera}" / f"ccd{ccd}" / "ffi")
+    # Pre-seed the spacecraft ephemeris cache so light curve generation doesn't query JPL
+    # Horizons during tests
+    ephemerides_directory = tmp_path / "ephemerides"
+    ephemerides_directory.mkdir()
+    shutil.copy(
+        SAMPLE_DATA_DIRECTORY / "ephemerides" / f"tess_ephem_orbit-{TEST_ORBIT:04d}.csv",
+        ephemerides_directory,
+    )
     return orbit_directory
 
 
@@ -51,6 +61,10 @@ def test_orbit_directory_setup(tmp_orbit_directory: Path):
             for subdirectory in ["ffi", "source", "epsf", "LC"]:
                 assert (tmp_orbit_directory / f"cam{camera}" / f"ccd{ccd}" / subdirectory).is_dir()
     assert len(list((tmp_orbit_directory / "cam1/ccd1/ffi").iterdir())) == 5
+    ephemeris_file = (
+        tmp_orbit_directory.parents[1] / "ephemerides" / f"tess_ephem_orbit-{TEST_ORBIT:04d}.csv"
+    )
+    assert ephemeris_file.is_file()
 
 
 def test_catalogs(

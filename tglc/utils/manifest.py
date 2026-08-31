@@ -57,6 +57,11 @@ class Manifest:
         return f"{type(self).__name__}({fields_string})"
 
     @property
+    def ephemerides_directory(self) -> Path:
+        """Directory containing cached TESS spacecraft ephemeris files."""
+        return self.tglc_data_dir / "ephemerides"
+
+    @property
     def orbit_directory(self) -> Path:
         """Directory containing data products related to the TESS orbit."""
         return self.tglc_data_dir / f"orbit-{self.orbit}" / "ffi"
