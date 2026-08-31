@@ -398,6 +398,8 @@ def migrate_cutout_pickle(
     pkl_path: Path,
     fits_path: Path | None = None,
     *,
+    cutout_x: int | None = None,
+    cutout_y: int | None = None,
     delete_original: bool = False,
 ) -> Path:
     """Convert a legacy cutout pickle into a FITS file.
@@ -415,6 +417,11 @@ def migrate_cutout_pickle(
     fits_path : pathlib.Path, optional
         Output FITS file path. Defaults to ``pkl_path`` with the ``.fits``
         suffix.
+    cutout_x, cutout_y : int, optional
+        Cutout grid indices to set on the unpickled cutout before writing.
+        Pickles written before these attributes existed carry no record of
+        them, so the FITS header would otherwise get ``CUTOUTX``/``CUTOUTY``
+        of -1. Callers can recover the indices from the legacy file name.
     delete_original : bool, optional
         If ``True``, remove ``pkl_path`` after the new FITS file has been
         verified readable. Defaults to ``False`` so the legacy file is
@@ -430,6 +437,11 @@ def migrate_cutout_pickle(
 
     with pkl_path.open("rb") as pickle_file:
         cutout = pickle.load(pickle_file)
+
+    if cutout_x is not None:
+        cutout.cutout_x = cutout_x
+    if cutout_y is not None:
+        cutout.cutout_y = cutout_y
 
     write_cutout_fits(cutout, fits_path)
     read_cutout_fits(fits_path)

@@ -288,6 +288,22 @@ def test_migrate_cutout_pickle_legacy_source_class(tmp_path: Path):
     assert fits_path.is_file()
 
 
+def test_migrate_cutout_pickle_sets_cutout_xy(tmp_path: Path):
+    """Legacy pickles predate cutout_x/cutout_y; callers can supply them from the file name."""
+    cutout = _make_synthetic_cutout()
+    del cutout.cutout_x
+    del cutout.cutout_y
+    pkl_path = tmp_path / "source_3_5.pkl"
+    with pkl_path.open("wb") as fp:
+        pickle.dump(cutout, fp, pickle.HIGHEST_PROTOCOL)
+
+    fits_path = migrate_cutout_pickle(pkl_path, cutout_x=3, cutout_y=5)
+
+    loaded = read_cutout_fits(fits_path)
+    assert loaded.cutout_x == 3
+    assert loaded.cutout_y == 5
+
+
 def test_migrate_epsf_npy(tmp_path: Path):
     epsf = _make_synthetic_epsf()
     npy_path = tmp_path / "epsf_0_0.npy"
