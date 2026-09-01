@@ -26,26 +26,14 @@ from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS, FITSFixedWarning
 import numpy as np
 
+from tglc.epsf import EPSF_BACKGROUND_COLUMNS
+
 
 if TYPE_CHECKING:
     from tglc.ffi import FFICutout
 
 
 logger = logging.getLogger(__name__)
-
-
-EPSF_BACKGROUND_COLUMNS = (
-    "y_strap",
-    "x_strap",
-    "flat_strap",
-    "x_gradient",
-    "y_gradient",
-    "flat",
-)
-"""Names of the 6 background columns appended after the ePSF parameters.
-
-The order matches the construction in :func:`tglc.epsf.make_tglc_design_matrix`.
-"""
 
 
 def _atomic_write(hdul: fits.HDUList, path: Path) -> None:
