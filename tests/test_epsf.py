@@ -249,6 +249,13 @@ def test_epsf_constructor_coerces_types():
     assert isinstance(epsf.orbit, int)
 
 
+def test_epsf_repr():
+    epsf = EPSF(make_synthetic_epsf(), **_epsf_metadata())
+    assert repr(epsf) == (
+        "<EPSF orbit-185 cam1-ccd1 cutout (0, 0) psf_size=11 oversample=2 cadences=3>"
+    )
+
+
 def test_epsf_shape_properties():
     epsf = EPSF(make_synthetic_epsf(), **_epsf_metadata())
     assert epsf.n_cadences == 3

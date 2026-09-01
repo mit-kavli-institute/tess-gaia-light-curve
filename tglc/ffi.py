@@ -250,6 +250,17 @@ class FFICutout:
         catalogdata.sort("tess_mag")
         self.gaia = catalogdata
 
+    def __repr__(self) -> str:
+        # Legacy pickles predate the cutout_x/cutout_y attributes, so fall back to the
+        # -1 "not set" sentinel rather than raising.
+        cutout_x = getattr(self, "cutout_x", -1)
+        cutout_y = getattr(self, "cutout_y", -1)
+        return (
+            f"<{type(self).__name__} orbit-{self.orbit} cam{self.camera}-ccd{self.ccd} "
+            f"cutout ({cutout_x}, {cutout_y}) size={self.size} "
+            f"cadences={len(self.time)} gaia={len(self.gaia)} tic={len(self.tic)}>"
+        )
+
 
 def _get_science_pixel_limits(scipixs_string: str) -> tuple[int, int, int, int]:
     """

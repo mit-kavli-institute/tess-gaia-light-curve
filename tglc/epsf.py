@@ -431,6 +431,13 @@ class EPSF:
         self.cutout_y = int(cutout_y)
         self.background_columns = tuple(background_columns)
 
+    def __repr__(self) -> str:
+        return (
+            f"<{type(self).__name__} orbit-{self.orbit} cam{self.camera}-ccd{self.ccd} "
+            f"cutout ({self.cutout_x}, {self.cutout_y}) "
+            f"psf_size={self.psf_size} oversample={self.oversample} cadences={self.n_cadences}>"
+        )
+
     @staticmethod
     def parameter_count(
         psf_size: int, oversample: int, n_background: int = len(EPSF_BACKGROUND_COLUMNS)
