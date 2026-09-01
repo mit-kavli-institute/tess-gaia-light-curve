@@ -14,11 +14,10 @@ import logging
 from pathlib import Path
 import re
 
-import numpy as np
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from tglc.io import EPSF_BACKGROUND_COLUMNS, migrate_cutout_pickle, migrate_epsf_npy
+from tglc.io import migrate_cutout_pickle, migrate_epsf_npy
 from tglc.utils.constants import get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
 
@@ -77,9 +76,6 @@ def _discover_work(args: argparse.Namespace) -> list[_WorkItem]:
 def migrate_main(args: argparse.Namespace):
     """Migrate legacy source pickles and ePSF numpy files to FITS."""
     sector = get_sector_containing_orbit(args.orbit)
-    expected_epsf_columns = (args.psf_size * args.oversample + 1) ** 2 + len(
-        EPSF_BACKGROUND_COLUMNS
-    )
 
     def migrate_item(item: _WorkItem) -> str:
         try:
@@ -93,14 +89,8 @@ def migrate_main(args: argparse.Namespace):
                     delete_original=args.delete_original,
                 )
             else:
-                epsf_shape = np.load(item.legacy_path, mmap_mode="r").shape
-                if len(epsf_shape) != 2 or epsf_shape[1] != expected_epsf_columns:
-                    logger.warning(
-                        f"ePSF file {item.legacy_path.resolve()} has shape {epsf_shape}, expected "
-                        f"(cadences, {expected_epsf_columns}) for psf_size={args.psf_size} and "
-                        f"oversample={args.oversample}"
-                    )
-                    return "failed"
+                # migrate_epsf_npy validates the array shape against psf_size/oversample and
+                # raises ValueError on mismatch, which is logged and counted below.
                 migrate_epsf_npy(
                     item.legacy_path,
                     psf_size=args.psf_size,

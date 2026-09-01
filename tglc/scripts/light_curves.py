@@ -36,9 +36,9 @@ def read_source_and_epsf_and_save_light_curves(
     """
     source_file, epsf_file = source_and_epsf_files
     source: FFICutout = read_cutout_fits(source_file)
-    epsf, _epsf_metadata = read_epsf_fits(epsf_file)
+    epsf = read_epsf_fits(epsf_file)
     for light_curve in generate_light_curves(
-        source, epsf, psf_size, oversample_factor, manifest.ephemerides_directory, tic_ids
+        source, epsf.array, psf_size, oversample_factor, manifest.ephemerides_directory, tic_ids
     ):
         manifest.tic_id = light_curve.meta["tic_id"]
         if replace or not manifest.light_curve_file.is_file():

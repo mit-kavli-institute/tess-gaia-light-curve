@@ -589,26 +589,11 @@ class EPSF:
         # Local import: breaks the epsf <-> io cycle.
         from tglc.io import read_epsf_fits
 
-        array, metadata = read_epsf_fits(path)
-        # n_background is implied by background_columns
-        metadata.pop("n_background", None)
-        return cls(array, **metadata)
+        return read_epsf_fits(path)
 
     def to_fits(self, path: Path) -> None:
         """Write this :class:`EPSF` to a FITS file via :func:`tglc.io.write_epsf_fits`."""
         # Local import: breaks the epsf <-> io cycle.
         from tglc.io import write_epsf_fits
 
-        write_epsf_fits(
-            path,
-            self.array,
-            psf_size=self.psf_size,
-            oversample=self.oversample,
-            orbit=self.orbit,
-            sector=self.sector,
-            camera=self.camera,
-            ccd=self.ccd,
-            cutout_x=self.cutout_x,
-            cutout_y=self.cutout_y,
-            n_background=self.n_background,
-        )
+        write_epsf_fits(self, path)

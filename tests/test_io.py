@@ -5,10 +5,11 @@ import pickle
 
 from astropy.table import MaskedColumn
 import numpy as np
+import pytest
 
+from tglc.epsf import EPSF, EPSF_BACKGROUND_COLUMNS
 from tglc.ffi import FFICutout, Source
 from tglc.io import (
-    EPSF_BACKGROUND_COLUMNS,
     migrate_cutout_pickle,
     migrate_epsf_npy,
     read_cutout_fits,
@@ -128,38 +129,54 @@ def test_cutout_fits_empty_gaia(tmp_path: Path):
 # ---------------------------------------------------------------------
 
 
-def test_write_epsf_fits_roundtrip(tmp_path: Path):
-    epsf = make_synthetic_epsf()
-    fits_path = tmp_path / "epsf_0_0.fits"
-
-    write_epsf_fits(
-        fits_path,
-        epsf,
-        psf_size=11,
-        oversample=2,
-        orbit=185,
-        sector=89,
-        camera=1,
-        ccd=1,
-        cutout_x=0,
-        cutout_y=0,
-    )
-    assert fits_path.is_file()
-
-    loaded, metadata = read_epsf_fits(fits_path)
-    np.testing.assert_array_equal(loaded, epsf)
-    assert metadata == {
+def _make_synthetic_epsf_product(**metadata) -> EPSF:
+    kwargs = {
         "psf_size": 11,
         "oversample": 2,
-        "n_background": len(EPSF_BACKGROUND_COLUMNS),
         "orbit": 185,
         "sector": 89,
         "camera": 1,
         "ccd": 1,
         "cutout_x": 0,
         "cutout_y": 0,
-        "background_columns": EPSF_BACKGROUND_COLUMNS,
     }
+    kwargs.update(metadata)
+    return EPSF(make_synthetic_epsf(), **kwargs)
+
+
+def test_write_epsf_fits_roundtrip(tmp_path: Path):
+    epsf = _make_synthetic_epsf_product()
+    fits_path = tmp_path / "epsf_0_0.fits"
+
+    write_epsf_fits(epsf, fits_path)
+    assert fits_path.is_file()
+
+    loaded = read_epsf_fits(fits_path)
+    assert isinstance(loaded, EPSF)
+    np.testing.assert_array_equal(loaded.array, epsf.array)
+    for attr in (
+        "psf_size",
+        "oversample",
+        "orbit",
+        "sector",
+        "camera",
+        "ccd",
+        "cutout_x",
+        "cutout_y",
+        "background_columns",
+    ):
+        assert getattr(loaded, attr) == getattr(epsf, attr), attr
+    assert loaded.background_columns == EPSF_BACKGROUND_COLUMNS
+
+
+def test_epsf_to_fits_from_fits_roundtrip(tmp_path: Path):
+    epsf = _make_synthetic_epsf_product(cutout_x=1, cutout_y=2)
+    fits_path = tmp_path / "epsf_1_2.fits"
+
+    epsf.to_fits(fits_path)
+    loaded = EPSF.from_fits(fits_path)
+    np.testing.assert_array_equal(loaded.array, epsf.array)
+    assert (loaded.cutout_x, loaded.cutout_y) == (1, 2)
 
 
 # ---------------------------------------------------------------------
@@ -234,10 +251,29 @@ def test_migrate_epsf_npy(tmp_path: Path):
     assert fits_path == npy_path.with_suffix(".fits")
     assert npy_path.is_file()  # default does NOT delete original
 
-    loaded, metadata = read_epsf_fits(fits_path)
-    np.testing.assert_array_equal(loaded, epsf)
-    assert metadata["psf_size"] == 11
-    assert metadata["orbit"] == 185
+    loaded = read_epsf_fits(fits_path)
+    np.testing.assert_array_equal(loaded.array, epsf)
+    assert loaded.psf_size == 11
+    assert loaded.orbit == 185
+
+
+def test_migrate_epsf_npy_rejects_mismatched_shape(tmp_path: Path):
+    npy_path = tmp_path / "epsf_0_0.npy"
+    np.save(npy_path, np.zeros((3, 10)))
+
+    with pytest.raises(ValueError, match="expected"):
+        migrate_epsf_npy(
+            npy_path,
+            psf_size=11,
+            oversample=2,
+            orbit=185,
+            sector=89,
+            camera=1,
+            ccd=1,
+            cutout_x=0,
+            cutout_y=0,
+        )
+    assert not npy_path.with_suffix(".fits").exists()
 
 
 def test_migrate_epsf_npy_delete_original(tmp_path: Path):

@@ -308,8 +308,8 @@ def test_full_pipeline_after_migration(
     cutout = read_cutout_fits(source_fits)
     with source_pkl.open("wb") as fp:
         pickle.dump(cutout, fp, pickle.HIGHEST_PROTOCOL)
-    epsf_array, epsf_metadata = read_epsf_fits(epsf_fits)
-    np.save(epsf_npy, epsf_array)
+    epsf = read_epsf_fits(epsf_fits)
+    np.save(epsf_npy, epsf.array)
     source_fits.unlink()
     epsf_fits.unlink()
 
@@ -317,14 +317,14 @@ def test_full_pipeline_after_migration(
     migrate_cutout_pickle(source_pkl, delete_original=True)
     migrate_epsf_npy(
         epsf_npy,
-        psf_size=epsf_metadata["psf_size"],
-        oversample=epsf_metadata["oversample"],
-        orbit=epsf_metadata["orbit"],
-        sector=epsf_metadata["sector"],
-        camera=epsf_metadata["camera"],
-        ccd=epsf_metadata["ccd"],
-        cutout_x=epsf_metadata["cutout_x"],
-        cutout_y=epsf_metadata["cutout_y"],
+        psf_size=epsf.psf_size,
+        oversample=epsf.oversample,
+        orbit=epsf.orbit,
+        sector=epsf.sector,
+        camera=epsf.camera,
+        ccd=epsf.ccd,
+        cutout_x=epsf.cutout_x,
+        cutout_y=epsf.cutout_y,
         delete_original=True,
     )
     assert not source_pkl.exists()

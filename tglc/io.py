@@ -26,7 +26,7 @@ from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS, FITSFixedWarning
 import numpy as np
 
-from tglc.epsf import EPSF_BACKGROUND_COLUMNS
+from tglc.epsf import EPSF
 
 
 if TYPE_CHECKING:
@@ -268,71 +268,48 @@ def read_cutout_fits(path: Path) -> FFICutout:
 # ---------------------------------------------------------------------
 
 
-def write_epsf_fits(
-    path: Path,
-    epsf: np.ndarray,
-    *,
-    psf_size: int,
-    oversample: int,
-    orbit: int,
-    sector: int,
-    camera: int,
-    ccd: int,
-    cutout_x: int,
-    cutout_y: int,
-    n_background: int = len(EPSF_BACKGROUND_COLUMNS),
-) -> None:
-    """Write a fitted ePSF parameter array to a single-HDU FITS file.
+def write_epsf_fits(epsf: EPSF, path: Path) -> None:
+    """Write a fitted ePSF to a single-HDU FITS file.
 
-    The primary HDU stores the ``(t, k)`` float64 array directly. The
-    background columns at ``epsf[:, -n_background:]`` follow the fixed order
-    in :data:`EPSF_BACKGROUND_COLUMNS`, also recorded in ``BGCOL*`` header
-    keywords for self-description.
+    The primary HDU stores the ``(t, k)`` float64 array directly, with the
+    ePSF configuration and TESS identifiers in the header. The background
+    column names are recorded in ``BGCOL*`` header keywords for
+    self-description.
 
     Parameters
     ----------
+    epsf : tglc.epsf.EPSF
+        Fitted ePSF to serialize. All header values are read from it.
     path : pathlib.Path
         Output FITS file path. The file is written atomically via
         :func:`_atomic_write`.
-    epsf : np.ndarray
-        2D ``(t, k)`` array of best-fit ePSF + background parameters, as
-        returned by :func:`tglc.epsf.fit_epsf`. Coerced to ``float64`` on
-        write.
-    psf_size : int
-        Side length in pixels of the square PSF model.
-    oversample : int
-        Factor by which the PSF was oversampled relative to image pixels.
-    orbit, sector, camera, ccd : int
-        TESS identifiers for the cutout this ePSF was fit for. Used to
-        match the file back to its originating :class:`FFICutout`.
-    cutout_x, cutout_y : int
-        Cutout grid indices matching :attr:`FFICutout.cutout_x` /
-        :attr:`FFICutout.cutout_y` on the originating cutout.
-    n_background : int, optional
-        Number of background-parameter columns appended after the ePSF
-        parameters. Defaults to ``len(EPSF_BACKGROUND_COLUMNS)`` (i.e. 6).
     """
     path = Path(path)
 
     header = fits.Header()
-    header["PSF_SIZE"] = int(psf_size)
-    header["OVRSAMPL"] = int(oversample)
-    header["N_BG"] = int(n_background)
-    header["ORBIT"] = int(orbit)
-    header["SECTOR"] = int(sector)
-    header["CAMERA"] = int(camera)
-    header["CCD"] = int(ccd)
-    header["CUTOUTX"] = int(cutout_x)
-    header["CUTOUTY"] = int(cutout_y)
-    for i, name in enumerate(EPSF_BACKGROUND_COLUMNS[:n_background]):
+    header["PSF_SIZE"] = epsf.psf_size
+    header["OVRSAMPL"] = epsf.oversample
+    header["N_BG"] = epsf.n_background
+    header["ORBIT"] = epsf.orbit
+    header["SECTOR"] = epsf.sector
+    header["CAMERA"] = epsf.camera
+    header["CCD"] = epsf.ccd
+    header["CUTOUTX"] = epsf.cutout_x
+    header["CUTOUTY"] = epsf.cutout_y
+    for i, name in enumerate(epsf.background_columns):
         header[f"BGCOL{i}"] = name
 
-    hdu = fits.PrimaryHDU(data=np.asarray(epsf, dtype=np.float64), header=header)
+    hdu = fits.PrimaryHDU(data=epsf.array, header=header)
     _atomic_write(fits.HDUList([hdu]), path)
 
 
-def read_epsf_fits(path: Path) -> tuple[np.ndarray, dict]:
-    """Read an ePSF parameter array and its metadata from a FITS file.
+def read_epsf_fits(path: Path) -> EPSF:
+    """Read an :class:`tglc.epsf.EPSF` previously written by :func:`write_epsf_fits`.
+
+    All header keywords written by :func:`write_epsf_fits` are required, and
+    the array shape is validated against the header configuration by the
+    :class:`tglc.epsf.EPSF` constructor, so corrupt or mismatched files fail
+    loudly at read time.
 
     Parameters
     ----------
@@ -341,14 +318,9 @@ def read_epsf_fits(path: Path) -> tuple[np.ndarray, dict]:
 
     Returns
     -------
-    epsf : np.ndarray
-        2D ``(t, k)`` float64 array of best-fit ePSF and background
-        parameters.
-    metadata : dict
-        Header values keyed by ``psf_size``, ``oversample``,
-        ``n_background``, ``orbit``, ``sector``, ``camera``, ``ccd``,
-        ``cutout_x``, ``cutout_y``, and ``background_columns`` (a tuple of
-        background-column names of length ``n_background``).
+    epsf : tglc.epsf.EPSF
+        Fitted ePSF with the parameter array and all metadata attributes
+        populated from the file.
     """
     path = Path(path)
     with warnings.catch_warnings():
@@ -358,19 +330,18 @@ def read_epsf_fits(path: Path) -> tuple[np.ndarray, dict]:
             header = hdul[0].header
             data = np.array(hdul[0].data, dtype=np.float64)
     n_background = int(header["N_BG"])
-    metadata = {
-        "psf_size": int(header["PSF_SIZE"]),
-        "oversample": int(header["OVRSAMPL"]),
-        "n_background": n_background,
-        "orbit": int(header["ORBIT"]),
-        "sector": int(header["SECTOR"]),
-        "camera": int(header["CAMERA"]),
-        "ccd": int(header["CCD"]),
-        "cutout_x": int(header["CUTOUTX"]),
-        "cutout_y": int(header["CUTOUTY"]),
-        "background_columns": tuple(str(header.get(f"BGCOL{i}", "")) for i in range(n_background)),
-    }
-    return data, metadata
+    return EPSF(
+        data,
+        psf_size=header["PSF_SIZE"],
+        oversample=header["OVRSAMPL"],
+        orbit=header["ORBIT"],
+        sector=header["SECTOR"],
+        camera=header["CAMERA"],
+        ccd=header["CCD"],
+        cutout_x=header["CUTOUTX"],
+        cutout_y=header["CUTOUTY"],
+        background_columns=tuple(str(header.get(f"BGCOL{i}", "")) for i in range(n_background)),
+    )
 
 
 # ---------------------------------------------------------------------
@@ -490,10 +461,9 @@ def migrate_epsf_npy(
     npy_path = Path(npy_path)
     fits_path = Path(fits_path) if fits_path is not None else _default_fits_path(npy_path)
 
-    epsf = np.load(npy_path)
-    write_epsf_fits(
-        fits_path,
-        epsf,
+    # The EPSF constructor validates the array shape against the supplied configuration.
+    epsf = EPSF(
+        np.load(npy_path),
         psf_size=psf_size,
         oversample=oversample,
         orbit=orbit,
@@ -503,6 +473,7 @@ def migrate_epsf_npy(
         cutout_x=cutout_x,
         cutout_y=cutout_y,
     )
+    write_epsf_fits(epsf, fits_path)
     read_epsf_fits(fits_path)
 
     if delete_original:

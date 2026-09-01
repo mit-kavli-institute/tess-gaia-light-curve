@@ -11,9 +11,9 @@ import multiprocessing
 from pathlib import Path
 import re
 
-from tglc.epsf import fit_epsf_for_source
+from tglc.epsf import EPSF
 from tglc.ffi import FFICutout
-from tglc.io import read_cutout_fits, write_epsf_fits
+from tglc.io import read_cutout_fits
 from tglc.utils._optional_deps import HAS_CUPY
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
@@ -76,26 +76,15 @@ def read_source_and_fit_and_save_epsf(
             logger.debug(f"Non-pool process {process_name} using CPU")
 
     with cuda_device_context:
-        epsf = fit_epsf_for_source(
+        epsf = EPSF.from_cutout_fit(
             source,
-            psf_size,
-            oversample_factor,
-            edge_compression_factor,
-            flux_uncertainty_power,
+            psf_size=psf_size,
+            oversample=oversample_factor,
+            edge_compression_factor=edge_compression_factor,
+            flux_uncertainty_power=flux_uncertainty_power,
             use_gpu=use_gpu,
         )
-    write_epsf_fits(
-        epsf_output_file,
-        epsf,
-        psf_size=psf_size,
-        oversample=oversample_factor,
-        orbit=source.orbit,
-        sector=source.sector,
-        camera=source.camera,
-        ccd=source.ccd,
-        cutout_x=source.cutout_x,
-        cutout_y=source.cutout_y,
-    )
+    epsf.to_fits(epsf_output_file)
 
 
 def make_epsfs_main(args: argparse.Namespace):
