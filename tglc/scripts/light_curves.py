@@ -23,13 +23,13 @@ def read_source_and_epsf_and_save_light_curves(
     source_and_epsf_files: tuple[Path, Path],
     manifest: Manifest,
     replace: bool,
-    psf_size: int,
-    oversample_factor: int,
     tic_ids: list[int] | None = None,
 ):
     """
     Read an :class:`FFICutout` FITS file and its matching ePSF FITS file, and extract and save
     light curves.
+
+    The ePSF configuration (PSF size, oversampling) comes from the ePSF FITS header.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
     unpacks I/O file paths from first argument.
@@ -37,9 +37,7 @@ def read_source_and_epsf_and_save_light_curves(
     source_file, epsf_file = source_and_epsf_files
     source: FFICutout = read_cutout_fits(source_file)
     epsf = read_epsf_fits(epsf_file)
-    for light_curve in generate_light_curves(
-        source, epsf.array, psf_size, oversample_factor, manifest.ephemerides_directory, tic_ids
-    ):
+    for light_curve in generate_light_curves(source, epsf, manifest.ephemerides_directory, tic_ids):
         manifest.tic_id = light_curve.meta["tic_id"]
         if replace or not manifest.light_curve_file.is_file():
             light_curve.write_hdf5(manifest.light_curve_file)
@@ -92,8 +90,6 @@ def make_light_curves_main(args: argparse.Namespace):
             read_source_and_epsf_and_save_light_curves,
             manifest=manifest,
             replace=args.replace,
-            psf_size=args.psf_size,
-            oversample_factor=args.oversample,
             tic_ids=args.tic,
         )
         consume_iterator_with_progress_bar(

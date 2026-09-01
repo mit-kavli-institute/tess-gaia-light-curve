@@ -247,15 +247,6 @@ def parse_tglc_args() -> argparse.Namespace:
     lightcurves_parser.add_argument(
         "-t", "--tic", type=int, nargs="+", help="Produce light curves only for listed TIC IDs."
     )
-    lightcurves_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
-    )
-    lightcurves_parser.add_argument(
-        "--oversample",
-        type=int,
-        default=2,
-        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
-    )
 
     # TEMPORARY command for the retroactive reprocessing campaign (issue #1): remove along with
     # tglc/scripts/migrate.py when the campaign is complete.
