@@ -24,6 +24,10 @@ from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 logger = logging.getLogger(__name__)
 
 
+LIGHT_CURVE_APERTURES = (("primary", 3), ("small", 1), ("large", 5))
+"""(name, side length) of the square apertures extracted for every light curve."""
+
+
 class CutoutWindow(NamedTuple):
     """Edge-clamped pixel window of a cutout within a larger image."""
 
@@ -280,10 +284,6 @@ def get_cutout_for_light_curve(
     psf_portion_in_cutout = get_psf_portion(cutout_target_psf)
 
     return decontaminated_cutout_flux, target_x_in_cutout, target_y_in_cutout, psf_portion_in_cutout
-
-
-LIGHT_CURVE_APERTURES = (("primary", 3), ("small", 1), ("large", 5))
-"""(name, side length) of the square apertures extracted for every light curve."""
 
 
 def get_high_background_cadence_mask(epsf: EPSF) -> np.ndarray:
