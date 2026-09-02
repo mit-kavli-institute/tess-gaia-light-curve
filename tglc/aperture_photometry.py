@@ -32,6 +32,7 @@ def get_normalized_aperture_photometry(
     tmag: float,
     exposure_time: u.Quantity,
     flux_portion: np.ndarray,
+    field_star_flux: np.ndarray,
     column_name_prefix: str = "",
 ) -> QTable:
     """
@@ -66,6 +67,13 @@ def get_normalized_aperture_photometry(
     flux_portion : array_like
         Proportion of flux in each pixel of the images. Should be a 2D array with shape matching the
         last two dimensions of `images`, and entries that sum to 1.
+    field_star_flux : array_like
+        Flux due to field stars in each pixel of the images. Should be a 2D array with shape
+        matching the last two dimensions of `images`, which is the average field star flux in each
+        pixel over all frames.
+
+        **Note:** The images are expected to already have the field star flux subtracted off
+        individually. This parameter is only used to calculate the contamination ratio.
     column_name_prefix : str
         Prefix inserted into column names. Default is no prefix.
 
@@ -84,7 +92,9 @@ def get_normalized_aperture_photometry(
         - `"{column_name_prefix}centroid_y"`: Y coordinate in image of flux-weighted aperture centroid
 
         Metadata:
-        - `"local_background"`: Local background flux level used in normalization.
+        - `"{column_name_prefix}local_background"`: Local background flux level used in normalization.
+        - `"{column_name_prefix}contamination_ratio"`: Average ratio of flux due to field stars to
+          flux due to target star.
     """
     bottom, top, left, right = get_aperture_limits(
         aperture_size, x, y, images.shape[1], images.shape[2]
@@ -113,6 +123,9 @@ def get_normalized_aperture_photometry(
         flux -= local_background
     flux[flux <= 0] = np.nan  # Prevent runtime warnings converting to magnitude
 
+    field_star_flux_in_aperture = np.nansum(field_star_flux[bottom:top, left:right])
+    contamination_ratio = field_star_flux_in_aperture / expected_aperture_flux
+
     table = QTable(
         {
             f"{column_name_prefix}flux": flux,
@@ -122,7 +135,10 @@ def get_normalized_aperture_photometry(
             f"{column_name_prefix}centroid_x": centroids[:, 1],
             f"{column_name_prefix}centroid_y": centroids[:, 0],
         },
-        meta={f"{column_name_prefix}local_background": local_background},
+        meta={
+            f"{column_name_prefix}local_background": local_background,
+            f"{column_name_prefix}contamination_ratio": contamination_ratio,
+        },
     )
 
     return table

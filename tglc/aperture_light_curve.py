@@ -135,6 +135,9 @@ class ApertureLightCurve(TimeSeries):
                 aperture_group.attrs["localbackground"] = self.meta[
                     f"{aperture_name.lower()}_aperture_local_background"
                 ]
+                aperture_group.attrs["contaminationratio"] = self.meta[
+                    f"{aperture_name.lower()}_aperture_contamination_ratio"
+                ]
 
                 aperture_data = self[f"{aperture_name.lower()}_aperture_magnitude"]
                 aperture_group.create_dataset("RawMagnitude", data=aperture_data, dtype=np.float64)
