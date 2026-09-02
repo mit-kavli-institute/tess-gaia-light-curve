@@ -282,6 +282,87 @@ def get_cutout_for_light_curve(
     return decontaminated_cutout_flux, target_x_in_cutout, target_y_in_cutout, psf_portion_in_cutout
 
 
+LIGHT_CURVE_APERTURES = (("primary", 3), ("small", 1), ("large", 5))
+"""(name, side length) of the square apertures extracted for every light curve."""
+
+
+def get_high_background_cadence_mask(epsf: EPSF) -> np.ndarray:
+    """
+    Flag cadences with an outlying background level in the fitted ePSF.
+
+    Cadences deviating from the median by at least 1 MAD-standard-deviation are flagged. The
+    flagged cadences are excluded from the photometric normalization in
+    `tglc.aperture_photometry.get_normalized_aperture_photometry`.
+
+    Parameters
+    ----------
+    epsf : EPSF
+        Fitted ePSF whose background parameters are examined.
+
+    Returns
+    -------
+    high_background_points : array
+        1D boolean array with one entry per cadence.
+    """
+    # Use the model's flat background level to determine points that should be ignored during
+    # normalization in photometry
+    # NOTE: "y_strap" preserves the historical column choice (epsf[:, -6]), but the comment above
+    # suggests the "flat" column was intended. Changing it alters photometry normalization, so it
+    # is tracked as a follow-up investigation rather than fixed here (issue #19).
+    flat_background = epsf.background_parameter("y_strap")
+    return np.abs(flat_background - np.nanmedian(flat_background)) >= mad_std(
+        flat_background, ignore_nan=True
+    )
+
+
+def get_background_model(
+    epsf: EPSF, full_design_matrix: np.ndarray, image_shape: tuple[int, int]
+) -> np.ndarray:
+    """
+    Forward-model the background for every cadence.
+
+    Parameters
+    ----------
+    epsf : EPSF
+        Fitted ePSF providing the per-cadence background parameters.
+    full_design_matrix : array
+        Full-image design matrix built with a background strap mask, whose last
+        `epsf.n_background` columns are the background contributions.
+    image_shape : tuple[int, int]
+        Numpy-order `(height, width)` shape of the image.
+
+    Returns
+    -------
+    model_background : array
+        Modeled background with shape `(t, height, width)`.
+    """
+    return evaluate_epsf_model(
+        full_design_matrix[:, -epsf.n_background :], epsf.background_parameters, image_shape
+    )
+
+
+def get_background_outlier_mask(background_light_curve: np.ndarray) -> np.ndarray:
+    """
+    Flag cadences whose background level is an outlier (at least 5 MAD-standard-deviations).
+
+    Parameters
+    ----------
+    background_light_curve : array
+        1D per-cadence background level at a target's position.
+
+    Returns
+    -------
+    background_outliers : array
+        1D boolean array with one entry per cadence.
+    """
+    # NOTE: mad_std is deliberately called without ignore_nan=True to preserve historical
+    # behavior: any NaN cadence (e.g. from a failed ePSF fit) makes the threshold NaN and the
+    # whole mask False. Tracked as a follow-up in issue #20.
+    return np.abs(background_light_curve - np.nanmedian(background_light_curve)) >= 5 * mad_std(
+        background_light_curve
+    )
+
+
 def generate_light_curves(
     source: FFICutout,
     epsf: EPSF,
@@ -343,20 +424,10 @@ def generate_light_curves(
         source.mask.data,
     )
 
-    # Use the model's flat background level to determine points that should be ignored during
-    # normalization in photometry
-    # NOTE: "y_strap" preserves the historical column choice (epsf[:, -6]), but the comment above
-    # suggests the "flat" column was intended. Changing it alters photometry normalization, so it
-    # is tracked as a follow-up investigation rather than fixed here.
-    flat_background = epsf.background_parameter("y_strap")
-    high_background_points = np.abs(flat_background - np.nanmedian(flat_background)) >= mad_std(
-        flat_background, ignore_nan=True
-    )
+    high_background_points = get_high_background_cadence_mask(epsf)
 
     # These are used for all light curves
-    model_background = np.dot(
-        design_matrix[:, -epsf.n_background :], epsf.background_parameters.T
-    ).T.reshape(source.flux.shape)
+    model_background = get_background_model(epsf, design_matrix, source.flux.shape[1:])
     time = Time(source.time, format="tjd", scale="tdb")
     tess_spacecraft_position = get_tess_spacecraft_position(
         source.orbit, time, ephemerides_directory
@@ -407,10 +478,12 @@ def generate_light_curves(
                 psf_portions,
                 column_name_prefix=f"{aperture_name}_aperture_",
             )
-            for aperture_name, aperture_size in [("primary", 3), ("small", 1), ("large", 5)]
+            for aperture_name, aperture_size in LIGHT_CURVE_APERTURES
         ]
-        for aperture_name, table in zip(
-            ["primary", "small", "large"], aperture_photometry_data, strict=False
+        # Shift centroids from the cutout frame into CCD coordinates. This re-derives the cutout
+        # origin, including the nearest-pixel rounding offset relative to the window edge.
+        for (aperture_name, _), table in zip(
+            LIGHT_CURVE_APERTURES, aperture_photometry_data, strict=False
         ):
             table[f"{aperture_name}_aperture_centroid_x"] += (
                 source.ccd_x + nearest_pixel_x[i] - star_x
@@ -421,9 +494,7 @@ def generate_light_curves(
 
         # Background light curve is the background level at the star's location
         background_light_curve = model_background[:, nearest_pixel_y[i], nearest_pixel_x[i]]
-        background_quality_flags = np.abs(
-            background_light_curve - np.nanmedian(background_light_curve)
-        ) >= 5 * mad_std(background_light_curve)
+        background_quality_flags = get_background_outlier_mask(background_light_curve)
 
         target_ccd_x = star_positions[i][0] + source.ccd_x
         target_ccd_y = star_positions[i][1] + source.ccd_y

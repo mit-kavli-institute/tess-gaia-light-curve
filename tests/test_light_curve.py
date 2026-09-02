@@ -17,9 +17,12 @@ from tglc.light_curve import (
     CutoutWindow,
     evaluate_epsf_model,
     generate_light_curves,
+    get_background_model,
+    get_background_outlier_mask,
     get_cutout_for_light_curve,
     get_cutout_window,
     get_design_matrix_rows_for_window,
+    get_high_background_cadence_mask,
     get_psf_portion,
     make_field_design_matrix,
     make_target_design_matrix,
@@ -320,3 +323,48 @@ def test_get_psf_portion_collapses_time_and_normalizes():
     assert portion.shape == (2, 2)
     np.testing.assert_allclose(np.nansum(portion), 1.0)
     np.testing.assert_array_equal(portion, [[4 / 9, 2 / 9], [1 / 9, 2 / 9]])
+
+
+# ---------------------------------------------------------------------
+# Background step-function unit tests
+# ---------------------------------------------------------------------
+
+
+def test_get_high_background_cadence_mask_uses_y_strap_column():
+    """Quirk pin for issue #19: the mask is driven by the y_strap column, not flat."""
+    _, epsf = _make_cutout_and_epsf()
+    epsf.array[:, :] = 1.0
+    # y_strap (column -6) outlier on cadence 1; flat (column -1) outlier on cadence 3
+    epsf.array[:, -6] = [1.05, 100.0, 1.0, 1.0, 1.1]
+    epsf.array[:, -1] = [1.0, 1.0, 1.0, 100.0, 1.0]
+
+    mask = get_high_background_cadence_mask(epsf)
+
+    np.testing.assert_array_equal(mask, [False, True, False, False, False])
+
+
+def test_get_background_model_matches_legacy_expression():
+    cutout, epsf = _make_cutout_and_epsf()
+    design_matrix, _ = _make_full_design_matrix(cutout, epsf)
+
+    model = get_background_model(epsf, design_matrix, cutout.flux.shape[1:])
+
+    legacy = np.dot(design_matrix[:, -epsf.n_background :], epsf.background_parameters.T).T.reshape(
+        cutout.flux.shape
+    )
+    np.testing.assert_array_equal(model, legacy)
+
+
+def test_get_background_outlier_mask():
+    background = np.array([10.0, 10.1, 9.9, 500.0, 10.0])
+
+    np.testing.assert_array_equal(
+        get_background_outlier_mask(background), [False, False, False, True, False]
+    )
+
+
+def test_get_background_outlier_mask_nan_disables_all_flags():
+    """Quirk pin for issue #20: one NaN cadence makes mad_std NaN and every flag False."""
+    background = np.array([10.0, 10.1, 9.9, 500.0, np.nan])
+
+    np.testing.assert_array_equal(get_background_outlier_mask(background), [False] * 5)
