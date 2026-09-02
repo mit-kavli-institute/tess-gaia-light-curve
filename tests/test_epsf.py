@@ -5,6 +5,7 @@ from tglc.epsf import (
     EPSF,
     EPSF_BACKGROUND_COLUMNS,
     fit_epsf,
+    get_default_epsf_flux_mask,
     get_xy_coordinates_centered_at_zero,
     make_tglc_design_matrix,
 )
@@ -394,3 +395,58 @@ def test_fit_epsf_nan_pixel_is_not_masked():
         design_matrix, flux, mask_nan_pixel, 1.4, regularization_extension_size
     )
     assert np.isfinite(masked_result).all()
+
+
+def test_get_default_epsf_flux_mask():
+    flux = np.array([[1.0, 1.0, 0.5], [1.0, np.nan, 1.0], [2.0, 1.0, 0.1]])
+    base_flux_mask = np.zeros(flux.shape, dtype=bool)
+    base_flux_mask[0, 0] = True
+
+    mask = get_default_epsf_flux_mask(flux, base_flux_mask)
+
+    # median of non-NaN values is 1.0; pixels < 0.8 are masked, base mask is unioned in,
+    # and the NaN pixel is NOT masked (NaN < x is False)
+    np.testing.assert_array_equal(
+        mask, [[True, False, True], [False, False, False], [False, False, True]]
+    )
+
+
+def test_fit_epsf_explicit_flux_mask_matches_default():
+    design_matrix, regularization_extension_size, flux = _small_fit_problem()
+    base_flux_mask = np.zeros(flux.shape, dtype=bool)
+
+    default_result = fit_epsf(
+        design_matrix, flux, base_flux_mask, 1.4, regularization_extension_size
+    )
+    explicit_result = fit_epsf(
+        design_matrix,
+        flux,
+        base_flux_mask,
+        1.4,
+        regularization_extension_size,
+        flux_mask=get_default_epsf_flux_mask(flux, base_flux_mask),
+    )
+
+    np.testing.assert_array_equal(default_result, explicit_result)
+
+
+def test_fit_epsf_custom_flux_mask_changes_fit():
+    design_matrix, regularization_extension_size, flux = _small_fit_problem()
+    base_flux_mask = np.zeros(flux.shape, dtype=bool)
+    # Mask the star's brightest pixels: the fit must differ from the default
+    custom_mask = np.zeros(flux.shape, dtype=bool)
+    custom_mask[4:7, 4:7] = True
+
+    default_result = fit_epsf(
+        design_matrix, flux, base_flux_mask, 1.4, regularization_extension_size
+    )
+    custom_result = fit_epsf(
+        design_matrix,
+        flux,
+        base_flux_mask,
+        1.4,
+        regularization_extension_size,
+        flux_mask=custom_mask,
+    )
+
+    assert not np.array_equal(default_result, custom_result)
