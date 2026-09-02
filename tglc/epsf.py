@@ -220,12 +220,46 @@ def make_tglc_design_matrix(
     return design_matrix, regularization_extension_size
 
 
+def get_default_epsf_flux_mask(flux: np.ndarray, base_flux_mask: np.ndarray) -> np.ndarray:
+    """
+    Default pixel mask used by :func:`fit_epsf`: the base mask plus dim pixels.
+
+    Pixels dimmer than 0.8 times the (NaN-ignoring) median flux are masked in addition to the
+    pixels flagged in `base_flux_mask`, discarding roughly the sky-dominated portion of the image
+    from the fit.
+
+    Parameters
+    ----------
+    flux : array
+        2D array of observed flux values for one cadence.
+    base_flux_mask : array[bool]
+        2D mask array indicating bad (e.g., saturated) pixels.
+
+    Returns
+    -------
+    flux_mask : array[bool]
+        2D boolean mask of pixels to exclude from the fit.
+
+    Notes
+    -----
+    NaN flux pixels are *not* masked by the brightness cut (``NaN < x`` is False); they are
+    excluded from the median by ``nanmedian`` but remain unmasked, so a NaN pixel propagates
+    into the fit's normal equations (historical behavior).
+
+    Works on numpy or cupy inputs: ``np.nanmedian`` dispatches to cupy via the array-function
+    protocol, and the element-wise operators are array-module-agnostic.
+    """
+    return base_flux_mask | (flux < 0.8 * np.nanmedian(flux))
+
+
 def fit_epsf(
     design_matrix: np.ndarray,
     flux: np.ndarray,
     base_flux_mask: np.ndarray,
     flux_uncertainty_power: float,
     regularization_dimensions: int,
+    *,
+    flux_mask: np.ndarray | None = None,
 ):
     """
     Find the best-fit ePSF parameters given a design matrix and observed flux values.
@@ -242,13 +276,18 @@ def fit_epsf(
     flux : array
         2D array of observed flux values with shape `(a, b)` where `a * b == m`.
     base_flux_mask : array[bool]
-        2D mask array indicating bad (e.g., saturated) pixels. Pixels lower than 0.8 times the
-        median flux are masked in addition.
+        2D mask array indicating bad (e.g., saturated) pixels.
     flux_uncertainty_power : float
         Power of pixel value used as observational uncertainty in fit. <1 emphasizes contributions
         from dimmer stars, 1 means all contributions are equal.
     regularization_dimensions : int
         Number of extra dimensions used for regularization. Must be added to observed vector.
+    flux_mask : array[bool], optional
+        Complete pixel mask to use for the fit. If `None` (the default), it is computed by
+        :func:`get_default_epsf_flux_mask`, which adds pixels dimmer than 0.8 times the median
+        flux to `base_flux_mask`. If provided, `base_flux_mask` is ignored; the mask must match
+        `flux`'s shape and should live on the same array module (numpy/cupy) as
+        `flux`/`design_matrix`.
 
     Returns
     -------
@@ -256,7 +295,8 @@ def fit_epsf(
         Array of best-fit ePSF parameters.
     """
     flux_uncertainty_scale = 1 / (np.abs(flux) ** flux_uncertainty_power)
-    flux_mask = base_flux_mask | (flux < 0.8 * np.nanmedian(flux))
+    if flux_mask is None:
+        flux_mask = get_default_epsf_flux_mask(flux, base_flux_mask)
 
     # Set up observed vector accounting for regularization
     observed_vector = np.hstack((flux.flatten(), np.zeros(regularization_dimensions)))
@@ -326,9 +366,7 @@ def fit_epsf_for_source(
     logger.debug(
         f"Fitting ePSF for source in {source.camera}-{source.ccd} at {source.ccd_x}, {source.ccd_y}"
     )
-    star_positions = np.array(
-        [source.gaia[f"sector_{source.sector}_x"], source.gaia[f"sector_{source.sector}_y"]]
-    ).T
+    star_positions = source.star_positions
     design_matrix, regularization_extension_size = make_tglc_design_matrix(
         source.flux.shape[1:],
         (psf_size, psf_size),

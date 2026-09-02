@@ -190,3 +190,6 @@ cython_debug/
 
 # Claude
 CLAUDE.md
+
+# Local notes for team discussion (never tracked)
+notes/
