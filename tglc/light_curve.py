@@ -4,6 +4,7 @@ from collections.abc import Generator
 import logging
 from math import ceil, floor
 from pathlib import Path
+from typing import NamedTuple
 
 from astropy.coordinates import SkyCoord
 from astropy.stats import mad_std
@@ -23,6 +24,192 @@ from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 logger = logging.getLogger(__name__)
 
 
+class CutoutWindow(NamedTuple):
+    """Edge-clamped pixel window of a cutout within a larger image."""
+
+    left: int
+    right: int
+    bottom: int
+    top: int
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Numpy-order (height, width) shape of the window."""
+        return (self.top - self.bottom, self.right - self.left)
+
+
+def get_cutout_window(
+    target_x: float, target_y: float, image_shape: tuple[int, int], cutout_size: int = 5
+) -> CutoutWindow:
+    """
+    Get the pixel window of a square cutout centered on the target's nearest pixel.
+
+    Parameters
+    ----------
+    target_x, target_y : float
+        Coordinates of the target in the image. The window is centered on the nearest pixel
+        (builtin `round`, i.e. banker's rounding).
+    image_shape : tuple[int, int]
+        Numpy-order `(height, width)` shape of the image; the window is clamped to it, so
+        cutouts near the image edge may be smaller than `cutout_size`.
+    cutout_size : int
+        Side length of the square cutout in pixels.
+
+    Returns
+    -------
+    window : CutoutWindow
+        Edge-clamped window bounds.
+    """
+    left = max(0, round(target_x) - floor(cutout_size / 2))
+    right = min(image_shape[1], round(target_x) + ceil(cutout_size / 2))
+    bottom = max(0, round(target_y) - floor(cutout_size / 2))
+    top = min(image_shape[0], round(target_y) + ceil(cutout_size / 2))
+    return CutoutWindow(left=left, right=right, bottom=bottom, top=top)
+
+
+def get_design_matrix_rows_for_window(window: CutoutWindow, image_width: int) -> np.ndarray:
+    """
+    Get the rows of a full-image design matrix corresponding to a cutout window's pixels.
+
+    Parameters
+    ----------
+    window : CutoutWindow
+        Cutout window within the image.
+    image_width : int
+        Width (number of columns) of the image the design matrix was built for, which is the
+        stride between rows in the flattened row-major pixel order. (The historical inline
+        formula used the image height instead, which is equivalent only because TGLC images
+        are square.)
+
+    Returns
+    -------
+    rows : array
+        1D integer array of design-matrix row indices for the window's pixels, in the same
+        order as the flattened cutout.
+    """
+    cutout_x, cutout_y = np.meshgrid(
+        np.arange(window.left, window.right), np.arange(window.bottom, window.top)
+    )
+    return (cutout_x + cutout_y * image_width).flatten()
+
+
+def make_target_design_matrix(
+    epsf: EPSF,
+    cutout_shape: tuple[int, int],
+    target_x_in_cutout: float,
+    target_y_in_cutout: float,
+    target_flux_ratio: float,
+) -> np.ndarray:
+    """
+    Make a PSF-only design matrix modeling a single target star in a cutout.
+
+    Delegates to `EPSF.make_design_matrix` with no background strap mask, so the result has
+    only the `epsf.n_psf_parameters` PSF columns. Note this is a numba-JIT compiled call
+    executed once per target.
+
+    Parameters
+    ----------
+    epsf : EPSF
+        Fitted ePSF whose `psf_size` and `oversample` define the PSF model grid.
+    cutout_shape : tuple[int, int]
+        Numpy-order `(height, width)` shape of the cutout.
+    target_x_in_cutout, target_y_in_cutout : float
+        Coordinates of the target in the cutout frame.
+    target_flux_ratio : float
+        Ratio of flux from the target star to the maximum flux from any star in the image.
+
+    Returns
+    -------
+    target_design_matrix : array
+        Design matrix with shape `(height * width, epsf.n_psf_parameters)`.
+    """
+    target_design_matrix, _ = epsf.make_design_matrix(
+        cutout_shape,
+        np.array([[target_x_in_cutout, target_y_in_cutout]]),
+        np.array([target_flux_ratio]),
+    )
+    return target_design_matrix
+
+
+def make_field_design_matrix(
+    full_design_matrix_for_cutout: np.ndarray, target_design_matrix: np.ndarray
+) -> np.ndarray:
+    """
+    Make a design matrix modeling everything in a cutout *except* the target star.
+
+    Subtracts the target's PSF-only design matrix from the leading PSF columns of the full
+    matrix. The background columns are untouched, so **when evaluated with the full ePSF
+    parameter array the result models the field stars AND the background**, not field stars
+    alone.
+
+    Parameters
+    ----------
+    full_design_matrix_for_cutout : array
+        Rows of the full-image design matrix for the cutout's pixels, with shape
+        `(n_pixels, k)`. Not modified.
+    target_design_matrix : array
+        PSF-only design matrix for the target star from :func:`make_target_design_matrix`,
+        with shape `(n_pixels, n_psf_parameters)`.
+
+    Returns
+    -------
+    field_design_matrix : array
+        Copy of `full_design_matrix_for_cutout` with the target subtracted from the PSF
+        columns.
+    """
+    field_design_matrix = full_design_matrix_for_cutout.copy()
+    field_design_matrix[:, : target_design_matrix.shape[1]] -= target_design_matrix
+    return field_design_matrix
+
+
+def evaluate_epsf_model(
+    design_matrix: np.ndarray, parameters: np.ndarray, image_shape: tuple[int, int]
+) -> np.ndarray:
+    """
+    Evaluate a per-cadence forward model of an image from a design matrix and ePSF parameters.
+
+    Parameters
+    ----------
+    design_matrix : array
+        Design matrix with shape `(height * width, n)`.
+    parameters : array
+        Per-cadence model parameters with shape `(t, n)` — e.g. `epsf.array` (full model),
+        `epsf.psf_parameters` (PSF only), or `epsf.background_parameters` (background only,
+        with the matching design-matrix columns).
+    image_shape : tuple[int, int]
+        Numpy-order `(height, width)` shape to reshape each modeled image to.
+
+    Returns
+    -------
+    model : array
+        Modeled image time series with shape `(t, height, width)`.
+    """
+    return np.dot(design_matrix, parameters.T).T.reshape(parameters.shape[0], *image_shape)
+
+
+def get_psf_portion(target_psf_model: np.ndarray) -> np.ndarray:
+    """
+    Get the portion of the target star's flux falling in each pixel of a cutout.
+
+    Note (historical behavior): the time axis is collapsed, giving a single static portion map
+    for all cadences, and the map is normalized to the *cutout* total — i.e. it assumes 100% of
+    the star's flux falls inside the cutout window.
+
+    Parameters
+    ----------
+    target_psf_model : array
+        Per-cadence forward model of the target star alone, with shape `(t, height, width)`,
+        from :func:`evaluate_epsf_model` with `epsf.psf_parameters`.
+
+    Returns
+    -------
+    psf_portion : array
+        2D `(height, width)` array on the cutout grid whose entries sum to 1, as required by
+        `tglc.aperture_photometry.get_normalized_aperture_photometry`.
+    """
+    return np.nansum(target_psf_model, axis=0) / np.nansum(target_psf_model)
+
+
 def get_cutout_for_light_curve(
     flux: np.ndarray,
     epsf: EPSF,
@@ -34,6 +221,12 @@ def get_cutout_for_light_curve(
 ) -> tuple[np.ndarray, float, float, np.ndarray]:
     """
     Make a decontaminated flux cutout suitable for light curve extraction.
+
+    Composes the module's cutout steps: crop a window around the target, forward-model
+    everything except the target (field stars **and** background), subtract that model from the
+    raw cutout, and compute the target's PSF portion map. Call the step functions directly to
+    obtain intermediates such as the raw cutout, the field model, or the per-cadence target PSF
+    model.
 
     Parameters
     ----------
@@ -60,44 +253,31 @@ def get_cutout_for_light_curve(
         (last two dimensions may differ for cutouts near image edges), the coordinates of the target
         star within the cutout, and the portion of the ePSF contained in each pixel of the cutout.
     """
-    points_in_oversampled_psf = epsf.n_psf_parameters
-    cutout_left = max(0, round(target_x) - floor(cutout_size / 2))
-    cutout_right = min(flux.shape[2], round(target_x) + ceil(cutout_size / 2))
-    cutout_bottom = max(0, round(target_y) - floor(cutout_size / 2))
-    cutout_top = min(flux.shape[1], round(target_y) + ceil(cutout_size / 2))
-    cutout_shape = (cutout_top - cutout_bottom, cutout_right - cutout_left)
-    target_x_in_cutout = target_x - cutout_left
-    target_y_in_cutout = target_y - cutout_bottom
-    cutout_flux = flux[:, cutout_bottom:cutout_top, cutout_left:cutout_right]
+    window = get_cutout_window(target_x, target_y, flux.shape[1:], cutout_size)
+    target_x_in_cutout = target_x - window.left
+    target_y_in_cutout = target_y - window.bottom
+    cutout_flux = flux[:, window.bottom : window.top, window.left : window.right]
 
     # We need a design matrix that models everything in the cutout *except* the target star. To do
     # this, we get the relevant part of the complete design matrix and a design matrix for
     # *just* the target star, and subtract the target design matrix from the complete design matrix.
     # Note: it would be simpler to do this for the entire image and then get the cutout at the end,
     # but that's *much* slower because the matrices involved are huge.
-    cutout_x, cutout_y = np.meshgrid(
-        np.arange(cutout_left, cutout_right), np.arange(cutout_bottom, cutout_top)
+    full_design_matrix_for_cutout = full_design_matrix[
+        get_design_matrix_rows_for_window(window, flux.shape[2])
+    ]
+    target_design_matrix = make_target_design_matrix(
+        epsf, window.shape, target_x_in_cutout, target_y_in_cutout, target_flux_ratio
     )
-    cutout_coordinate_rows_in_design_matrix = (cutout_x + cutout_y * flux.shape[1]).flatten()
-    full_design_matrix_for_cutout = full_design_matrix[cutout_coordinate_rows_in_design_matrix]
-
-    target_design_matrix_for_cutout, _ = epsf.make_design_matrix(
-        cutout_shape,
-        np.array([[target_x_in_cutout, target_y_in_cutout]]),
-        np.array([target_flux_ratio]),
+    field_design_matrix = make_field_design_matrix(
+        full_design_matrix_for_cutout, target_design_matrix
     )
-
-    field_design_matrix_for_cutout = full_design_matrix_for_cutout.copy()
-    field_design_matrix_for_cutout[:, :points_in_oversampled_psf] -= target_design_matrix_for_cutout
-    cutout_field_model = np.dot(field_design_matrix_for_cutout, epsf.array.T).T.reshape(
-        flux.shape[0], *cutout_shape
-    )
+    # The field model includes the background model, so this subtraction removes both.
+    cutout_field_model = evaluate_epsf_model(field_design_matrix, epsf.array, window.shape)
     decontaminated_cutout_flux = cutout_flux - cutout_field_model
 
-    cutout_target_psf = np.dot(target_design_matrix_for_cutout, epsf.psf_parameters.T).T.reshape(
-        flux.shape[0], *cutout_shape
-    )
-    psf_portion_in_cutout = np.nansum(cutout_target_psf, axis=0) / np.nansum(cutout_target_psf)
+    cutout_target_psf = evaluate_epsf_model(target_design_matrix, epsf.psf_parameters, window.shape)
+    psf_portion_in_cutout = get_psf_portion(cutout_target_psf)
 
     return decontaminated_cutout_flux, target_x_in_cutout, target_y_in_cutout, psf_portion_in_cutout
 

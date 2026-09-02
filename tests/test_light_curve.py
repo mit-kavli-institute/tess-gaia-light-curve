@@ -13,7 +13,17 @@ import numpy as np
 import pytest
 
 from tglc.epsf import EPSF
-from tglc.light_curve import generate_light_curves, get_cutout_for_light_curve
+from tglc.light_curve import (
+    CutoutWindow,
+    evaluate_epsf_model,
+    generate_light_curves,
+    get_cutout_for_light_curve,
+    get_cutout_window,
+    get_design_matrix_rows_for_window,
+    get_psf_portion,
+    make_field_design_matrix,
+    make_target_design_matrix,
+)
 
 from .synthetic_data import make_synthetic_cutout, make_synthetic_epsf
 
@@ -217,3 +227,96 @@ def test_generate_light_curves_rejects_mismatched_epsf():
 
     with pytest.raises(ValueError, match="does not match"):
         next(generate_light_curves(cutout, mismatched_epsf, Path("/nonexistent")))
+
+
+# ---------------------------------------------------------------------
+# Cutout step-function unit tests
+# ---------------------------------------------------------------------
+
+
+def test_get_cutout_window_interior():
+    window = get_cutout_window(5.5, 6.5, (12, 12))
+
+    # Banker's rounding: round(5.5) == 6, round(6.5) == 6
+    assert window == CutoutWindow(left=4, right=9, bottom=4, top=9)
+    assert window.shape == (5, 5)
+
+
+def test_get_cutout_window_edge_clamped():
+    window = get_cutout_window(10.5, 9.5, (12, 12))
+
+    # round(10.5) == 10: right edge clamps to the image width
+    assert window == CutoutWindow(left=8, right=12, bottom=8, top=12)
+    assert window.shape == (4, 4)
+
+    low_window = get_cutout_window(0.5, 0.5, (12, 12))
+    # round(0.5) == 0: left/bottom clamp to 0
+    assert low_window == CutoutWindow(left=0, right=3, bottom=0, top=3)
+
+
+def test_get_design_matrix_rows_for_window():
+    window = CutoutWindow(left=1, right=3, bottom=2, top=4)
+
+    rows = get_design_matrix_rows_for_window(window, 12)
+
+    np.testing.assert_array_equal(rows, [25, 26, 37, 38])
+
+
+def test_get_design_matrix_rows_for_window_matches_legacy_height_stride_formula():
+    """On square images, the correct width stride equals the historical height-based formula."""
+    image_shape = (12, 12)
+    window = CutoutWindow(left=4, right=9, bottom=4, top=9)
+    cutout_x, cutout_y = np.meshgrid(
+        np.arange(window.left, window.right), np.arange(window.bottom, window.top)
+    )
+    legacy_rows = (cutout_x + cutout_y * image_shape[0]).flatten()  # height used as stride
+
+    np.testing.assert_array_equal(
+        get_design_matrix_rows_for_window(window, image_shape[1]), legacy_rows
+    )
+
+
+def test_make_target_design_matrix_matches_direct_call():
+    _, epsf = _make_cutout_and_epsf()
+
+    target_design_matrix = make_target_design_matrix(epsf, (5, 5), 2.5, 2.5, 1.0)
+
+    direct, _ = epsf.make_design_matrix((5, 5), np.array([[2.5, 2.5]]), np.array([1.0]))
+    np.testing.assert_array_equal(target_design_matrix, direct)
+    assert target_design_matrix.shape == (25, epsf.n_psf_parameters)
+
+
+def test_make_field_design_matrix_subtracts_psf_columns_only():
+    full = np.arange(12.0).reshape(3, 4)  # 2 PSF columns + 2 background columns
+    target = np.ones((3, 2))
+
+    field = make_field_design_matrix(full, target)
+
+    np.testing.assert_array_equal(field[:, :2], full[:, :2] - 1.0)
+    np.testing.assert_array_equal(field[:, 2:], full[:, 2:])  # background columns untouched
+    np.testing.assert_array_equal(full, np.arange(12.0).reshape(3, 4))  # input not mutated
+
+
+def test_evaluate_epsf_model():
+    design_matrix = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 0.0]])
+    parameters = np.array([[1.0, 2.0], [3.0, 4.0]])  # 2 cadences
+
+    model = evaluate_epsf_model(design_matrix, parameters, (2, 2))
+
+    np.testing.assert_array_equal(
+        model,
+        np.dot(design_matrix, parameters.T).T.reshape(2, 2, 2),
+    )
+    assert model.shape == (2, 2, 2)
+
+
+def test_get_psf_portion_collapses_time_and_normalizes():
+    model = np.zeros((2, 2, 2))
+    model[0] = [[1.0, 1.0], [1.0, 1.0]]
+    model[1] = [[3.0, 1.0], [np.nan, 1.0]]
+
+    portion = get_psf_portion(model)
+
+    assert portion.shape == (2, 2)
+    np.testing.assert_allclose(np.nansum(portion), 1.0)
+    np.testing.assert_array_equal(portion, [[4 / 9, 2 / 9], [1 / 9, 2 / 9]])
