@@ -2,12 +2,12 @@
 Script/functions for downloading sample data products.
 
 Uses [pooch](https://www.fatiando.org/pooch/latest/index.html) to handle actual downloads.
+``pooch`` is a dev-extra and is imported lazily inside :func:`download_ffis` so that test
+collection succeeds without it installed.
 """
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-
-import pooch
 
 
 def download_ffis():
@@ -18,6 +18,8 @@ def download_ffis():
 
     See the sample data readme for information on updating the data used here.
     """
+    import pooch
+
     base_url = "https://mast.stsci.edu/api/v0.1/Download/file/?uri=mast:HLSP/tica/s0089/cam1-ccd1/"
     file_fmt = "hlsp_tica_tess_ffi_s0089-o1-{cadence:08d}-cam1-ccd1_tess_v01_img.fits"
     cadences = range(1078000, 1078005)

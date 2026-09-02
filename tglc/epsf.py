@@ -1,11 +1,35 @@
-"""ePSF helper functions."""
+"""ePSF fitting functions and the fitted-ePSF data product class."""
 
+import logging
 from math import ceil, floor
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from numba import jit
 import numpy as np
 
 from tglc.utils._optional_deps import HAS_CUPY
+
+
+if TYPE_CHECKING:
+    from tglc.ffi import FFICutout
+
+
+logger = logging.getLogger(__name__)
+
+
+EPSF_BACKGROUND_COLUMNS = (
+    "y_strap",
+    "x_strap",
+    "flat_strap",
+    "x_gradient",
+    "y_gradient",
+    "flat",
+)
+"""Names of the 6 background columns appended after the ePSF parameters.
+
+The order matches the construction in :func:`make_tglc_design_matrix`.
+"""
 
 
 @jit
@@ -265,3 +289,318 @@ def fit_epsf(
     except xp.linalg.LinAlgError:
         # Just in case - this is useful eg for testing
         return xp.linalg.lstsq(A, b)[0]
+
+
+def fit_epsf_for_source(
+    source: "FFICutout",
+    psf_size: int,
+    oversample_factor: int,
+    edge_compression_factor: float,
+    flux_uncertainty_power: float,
+    use_gpu: bool = True,
+):
+    """
+    Fit an ePSF for each cadence in an :class:`FFICutout`.
+
+    Parameters
+    ----------
+    source : FFICutout
+        FFI cutout with observed flux, star positions, and star brightnesses.
+    psf_size : int
+        Side length of ePSF in pixels.
+    oversample_factor : int
+        Factor by which to oversample the ePSF compared to image pixels.
+    flux_uncertainty_power : float
+        Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes
+        contributions from dimmer stars, 1 means all contributions are equal.
+    use_gpu : bool
+        If `True`, use `cupy` to run the ePSF parameter fit on the GPU. Requires `cupy` to be
+        installed and at least one CUDA device to be available.
+
+    Returns
+    -------
+    epsf : array
+        2D array where first dimension corresponds to cadences in `source` and second dimension
+        contains the best-fit ePSF parameters per cadence.
+    """
+    logger.debug(
+        f"Fitting ePSF for source in {source.camera}-{source.ccd} at {source.ccd_x}, {source.ccd_y}"
+    )
+    star_positions = np.array(
+        [source.gaia[f"sector_{source.sector}_x"], source.gaia[f"sector_{source.sector}_y"]]
+    ).T
+    design_matrix, regularization_extension_size = make_tglc_design_matrix(
+        source.flux.shape[1:],
+        (psf_size, psf_size),
+        oversample_factor,
+        star_positions,
+        source.gaia["tess_flux_ratio"].data,
+        source.mask.data,
+        edge_compression_factor,
+    )
+    flux = source.flux
+    # Mask out saturated pixels as a base
+    base_flux_mask = source.mask.mask
+
+    if use_gpu and HAS_CUPY:
+        import cupy as cp
+
+        design_matrix = cp.asarray(design_matrix)
+        flux = cp.asarray(flux)
+        base_flux_mask = cp.asarray(base_flux_mask)
+        xp = cp
+    else:
+        xp = np
+
+    e_psf = xp.zeros((flux.shape[0], design_matrix.shape[1]))
+    # JIT-ing this loop using numba did not give much performance benefit. Maybe vectorizing would?
+    for i in range(flux.shape[0]):
+        try:
+            # fit_epsf will automatically use the appropriate lstsq method.
+            e_psf[i] = fit_epsf(
+                design_matrix,
+                flux[i],
+                base_flux_mask,
+                flux_uncertainty_power,
+                regularization_extension_size,
+            )
+        except np.linalg.LinAlgError as e:
+            logger.warning(f"Error while fitting ePSF: {e}")
+            e_psf[i] = np.nan
+    if xp != np:
+        e_psf = e_psf.get()
+    return e_psf
+
+
+class EPSF:
+    """
+    Fitted-ePSF data product: per-cadence best-fit ePSF and background parameters for one FFI
+    cutout, bundled with the metadata needed to interpret and trace the parameter array.
+    """
+
+    def __init__(
+        self,
+        array: np.ndarray,
+        *,
+        psf_size: int,
+        oversample: int,
+        orbit: int,
+        sector: int,
+        camera: int,
+        ccd: int,
+        cutout_x: int,
+        cutout_y: int,
+        background_columns: tuple[str, ...] = EPSF_BACKGROUND_COLUMNS,
+    ):
+        """
+        Parameters
+        ----------
+        array : array
+            2D ``(t, k)`` array of best-fit ePSF + background parameters, where ``t`` is the
+            number of cadences and ``k == parameter_count(psf_size, oversample)``. Coerced to a
+            float64 numpy array; cadences whose fit failed are rows of NaN.
+        psf_size : int
+            Side length in pixels of the square PSF model.
+        oversample : int
+            Factor by which the PSF is oversampled relative to image pixels.
+        orbit, sector, camera, ccd : int
+            TESS identifiers for the cutout this ePSF was fit for.
+        cutout_x, cutout_y : int
+            Cutout grid indices matching the originating :class:`FFICutout`. ``-1`` is a legacy
+            "not set" sentinel.
+        background_columns : tuple[str, ...]
+            Names of the background parameter columns appended after the PSF parameters. Defaults
+            to :data:`EPSF_BACKGROUND_COLUMNS`.
+        """
+        array = np.asarray(array, dtype=np.float64)
+        expected_columns = self.parameter_count(psf_size, oversample, len(background_columns))
+        if array.ndim != 2 or array.shape[1] != expected_columns:
+            raise ValueError(
+                f"ePSF array has shape {array.shape}; expected (n_cadences, {expected_columns}) "
+                f"for psf_size={psf_size}, oversample={oversample}, and {len(background_columns)} "
+                "background parameters"
+            )
+        self.array = array
+        self.psf_size = int(psf_size)
+        self.oversample = int(oversample)
+        self.orbit = int(orbit)
+        self.sector = int(sector)
+        self.camera = int(camera)
+        self.ccd = int(ccd)
+        self.cutout_x = int(cutout_x)
+        self.cutout_y = int(cutout_y)
+        self.background_columns = tuple(background_columns)
+
+    def __repr__(self) -> str:
+        return (
+            f"<{type(self).__name__} orbit-{self.orbit} cam{self.camera}-ccd{self.ccd} "
+            f"cutout ({self.cutout_x}, {self.cutout_y}) "
+            f"psf_size={self.psf_size} oversample={self.oversample} cadences={self.n_cadences}>"
+        )
+
+    @staticmethod
+    def parameter_count(
+        psf_size: int, oversample: int, n_background: int = len(EPSF_BACKGROUND_COLUMNS)
+    ) -> int:
+        """Total number of fit parameters (``k``) for the given ePSF configuration."""
+        return (psf_size * oversample + 1) ** 2 + n_background
+
+    @property
+    def n_cadences(self) -> int:
+        """Number of cadences (``t``) the ePSF was fit for."""
+        return self.array.shape[0]
+
+    @property
+    def n_parameters(self) -> int:
+        """Total number of fit parameters (``k``)."""
+        return self.array.shape[1]
+
+    @property
+    def n_background(self) -> int:
+        """Number of background parameter columns."""
+        return len(self.background_columns)
+
+    @property
+    def oversampled_psf_shape(self) -> tuple[int, int]:
+        """Shape of the oversampled PSF model grid."""
+        return (self.psf_size * self.oversample + 1, self.psf_size * self.oversample + 1)
+
+    @property
+    def n_psf_parameters(self) -> int:
+        """Number of PSF model parameters (points in the oversampled PSF grid)."""
+        return (self.psf_size * self.oversample + 1) ** 2
+
+    @property
+    def psf_parameters(self) -> np.ndarray:
+        """View of the PSF model parameters, with shape ``(t, n_psf_parameters)``."""
+        return self.array[:, : self.n_psf_parameters]
+
+    @property
+    def background_parameters(self) -> np.ndarray:
+        """View of the background parameters, with shape ``(t, n_background)``."""
+        return self.array[:, self.n_psf_parameters :]
+
+    @property
+    def failed_cadence_mask(self) -> np.ndarray:
+        """Boolean array flagging cadences whose ePSF fit failed (recorded as rows of NaN)."""
+        return np.isnan(self.array).any(axis=1)
+
+    def background_parameter(self, name: str) -> np.ndarray:
+        """
+        Get the time series of a single background parameter by name.
+
+        Parameters
+        ----------
+        name : str
+            One of the names in ``background_columns``.
+
+        Returns
+        -------
+        parameter : array
+            1D array of the parameter's best-fit value per cadence, with shape ``(t,)``.
+        """
+        try:
+            column = self.background_columns.index(name)
+        except ValueError:
+            raise ValueError(
+                f"Unknown background parameter {name!r}: valid names are {self.background_columns}"
+            ) from None
+        return self.array[:, self.n_psf_parameters + column]
+
+    def make_design_matrix(
+        self,
+        image_shape: tuple[int, int],
+        star_positions: np.ndarray,
+        star_flux_ratios: np.ndarray,
+        background_strap_mask: np.ndarray | None = None,
+        edge_compression_scale_factor: float | None = None,
+    ) -> tuple[np.ndarray, int]:
+        """
+        Construct a TGLC design matrix matching this ePSF's ``psf_size`` and ``oversample``.
+
+        Delegates to :func:`make_tglc_design_matrix`; see its docstring for parameter and return
+        value details.
+        """
+        return make_tglc_design_matrix(
+            image_shape,
+            (self.psf_size, self.psf_size),
+            self.oversample,
+            star_positions,
+            star_flux_ratios,
+            background_strap_mask,
+            edge_compression_scale_factor,
+        )
+
+    def matches_cutout(self, cutout: "FFICutout") -> bool:
+        """
+        Check whether this ePSF was fit for the given :class:`FFICutout`.
+
+        Compares the TESS identifiers, the cutout grid indices (ignoring the legacy ``-1``
+        "not set" sentinel on either side), and the cadence counts.
+        """
+        if (self.orbit, self.sector, self.camera, self.ccd) != (
+            cutout.orbit,
+            cutout.sector,
+            cutout.camera,
+            cutout.ccd,
+        ):
+            return False
+        for own_index, cutout_index in [
+            (self.cutout_x, cutout.cutout_x),
+            (self.cutout_y, cutout.cutout_y),
+        ]:
+            if own_index != -1 and cutout_index != -1 and own_index != cutout_index:
+                return False
+        return self.n_cadences == cutout.flux.shape[0]
+
+    @classmethod
+    def from_cutout_fit(
+        cls,
+        cutout: "FFICutout",
+        *,
+        psf_size: int,
+        oversample: int,
+        edge_compression_factor: float,
+        flux_uncertainty_power: float,
+        use_gpu: bool = True,
+    ) -> "EPSF":
+        """
+        Fit an ePSF for each cadence of an :class:`FFICutout`.
+
+        Delegates the fit to :func:`fit_epsf_for_source` and harvests the identifying metadata
+        from the cutout; see :func:`fit_epsf_for_source` for parameter details.
+        """
+        array = fit_epsf_for_source(
+            cutout,
+            psf_size,
+            oversample,
+            edge_compression_factor,
+            flux_uncertainty_power,
+            use_gpu=use_gpu,
+        )
+        return cls(
+            array,
+            psf_size=psf_size,
+            oversample=oversample,
+            orbit=cutout.orbit,
+            sector=cutout.sector,
+            camera=cutout.camera,
+            ccd=cutout.ccd,
+            cutout_x=cutout.cutout_x,
+            cutout_y=cutout.cutout_y,
+        )
+
+    @classmethod
+    def from_fits(cls, path: Path) -> "EPSF":
+        """Read an :class:`EPSF` from a FITS file written by :func:`tglc.io.write_epsf_fits`."""
+        # Local import: breaks the epsf <-> io cycle.
+        from tglc.io import read_epsf_fits
+
+        return read_epsf_fits(path)
+
+    def to_fits(self, path: Path) -> None:
+        """Write this :class:`EPSF` to a FITS file via :func:`tglc.io.write_epsf_fits`."""
+        # Local import: breaks the epsf <-> io cycle.
+        from tglc.io import write_epsf_fits
+
+        write_epsf_fits(self, path)

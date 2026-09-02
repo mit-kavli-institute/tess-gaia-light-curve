@@ -14,8 +14,8 @@ import numpy as np
 
 from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
 from tglc.aperture_photometry import get_normalized_aperture_photometry
-from tglc.epsf import make_tglc_design_matrix
-from tglc.ffi import Source
+from tglc.epsf import EPSF
+from tglc.ffi import FFICutout
 from tglc.utils.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
 from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
@@ -25,13 +25,11 @@ logger = logging.getLogger(__name__)
 
 def get_cutout_for_light_curve(
     flux: np.ndarray,
-    epsf: np.ndarray,
+    epsf: EPSF,
     full_design_matrix: np.ndarray,
     target_x: float,
     target_y: float,
     target_flux_ratio: float,
-    psf_shape: tuple[int, int],
-    psf_oversample_factor: int,
     cutout_size: int = 5,
 ) -> tuple[np.ndarray, float, float, np.ndarray]:
     """
@@ -41,8 +39,9 @@ def get_cutout_for_light_curve(
     ----------
     flux : array
         Time series of images, with shape `(t, n, m)`.
-    epsf : array
-        Best-fit PSF and background parameters, with shape `(t, k)`.
+    epsf : EPSF
+        Best-fit PSF and background parameters. Its `psf_size` and `oversample` are used to create
+        a design matrix specific to the target star.
     full_design_matrix : array
         Design matrix modeling all stars in the image (and background), with shape `(n * m, k)`.
     target_x, target_y : float
@@ -50,11 +49,6 @@ def get_cutout_for_light_curve(
     target_flux_ratio : float
         Ratio of flux from target star to max flux from any star in the image, according to Gaia
         catalog data. Used to create a design matrix specifc to the target star.
-    psf_shape : tuple[int, int]
-        Shape of the PSF in pixels. Used to create a design matrix specific to the target star.
-    psf_oversample_factor: int
-        Factor by which to oversample the PSF compared to image pixels. Used to create a design
-        matrix specific to the target star.
     cutout_size : int
         Side length of the square cutout in pixels. Cutout may be smaller if target star is near the
         edge of the images.
@@ -66,9 +60,7 @@ def get_cutout_for_light_curve(
         (last two dimensions may differ for cutouts near image edges), the coordinates of the target
         star within the cutout, and the portion of the ePSF contained in each pixel of the cutout.
     """
-    points_in_oversampled_psf = (psf_shape[0] * psf_oversample_factor + 1) * (
-        psf_shape[1] * psf_oversample_factor + 1
-    )
+    points_in_oversampled_psf = epsf.n_psf_parameters
     cutout_left = max(0, round(target_x) - floor(cutout_size / 2))
     cutout_right = min(flux.shape[2], round(target_x) + ceil(cutout_size / 2))
     cutout_bottom = max(0, round(target_y) - floor(cutout_size / 2))
@@ -89,34 +81,30 @@ def get_cutout_for_light_curve(
     cutout_coordinate_rows_in_design_matrix = (cutout_x + cutout_y * flux.shape[1]).flatten()
     full_design_matrix_for_cutout = full_design_matrix[cutout_coordinate_rows_in_design_matrix]
 
-    target_design_matrix_for_cutout, _ = make_tglc_design_matrix(
+    target_design_matrix_for_cutout, _ = epsf.make_design_matrix(
         cutout_shape,
-        psf_shape,
-        psf_oversample_factor,
         np.array([[target_x_in_cutout, target_y_in_cutout]]),
         np.array([target_flux_ratio]),
     )
 
     field_design_matrix_for_cutout = full_design_matrix_for_cutout.copy()
     field_design_matrix_for_cutout[:, :points_in_oversampled_psf] -= target_design_matrix_for_cutout
-    cutout_field_model = np.dot(field_design_matrix_for_cutout, epsf.T).T.reshape(
+    cutout_field_model = np.dot(field_design_matrix_for_cutout, epsf.array.T).T.reshape(
         flux.shape[0], *cutout_shape
     )
     decontaminated_cutout_flux = cutout_flux - cutout_field_model
 
-    cutout_target_psf = np.dot(
-        target_design_matrix_for_cutout, epsf[:, :points_in_oversampled_psf].T
-    ).T.reshape(flux.shape[0], *cutout_shape)
+    cutout_target_psf = np.dot(target_design_matrix_for_cutout, epsf.psf_parameters.T).T.reshape(
+        flux.shape[0], *cutout_shape
+    )
     psf_portion_in_cutout = np.nansum(cutout_target_psf, axis=0) / np.nansum(cutout_target_psf)
 
     return decontaminated_cutout_flux, target_x_in_cutout, target_y_in_cutout, psf_portion_in_cutout
 
 
 def generate_light_curves(
-    source: Source,
-    epsf: np.ndarray,
-    psf_size: int,
-    psf_oversample_factor: int,
+    source: FFICutout,
+    epsf: EPSF,
     ephemerides_directory: Path,
     tic_ids: list[int] | None = None,
 ) -> Generator[ApertureLightCurve, None, None]:
@@ -125,15 +113,11 @@ def generate_light_curves(
 
     Parameters
     ----------
-    source : Source
-        Cutout `Source` object including flux data and positions of stars in the flux images.
-    epsf : array
-        Best-fit PSF and background parameters, with shape `(t, k)`.
-    psf_size : array
-        Side length of square PSF in pixels. Used to construct design matrices.
-    psf_oversample_factor : int
-        Factor by which to oversample the PSF compared to image pixels. Used to construct design
-        matrices.
+    source : FFICutout
+        Cutout including flux data and positions of stars in the flux images.
+    epsf : EPSF
+        Best-fit PSF and background parameters fit for `source`. Its `psf_size` and `oversample`
+        are used to construct design matrices.
     ephemerides_directory : Path
         Directory containing cached TESS spacecraft ephemeris files, used for barycentric time
         corrections.
@@ -145,7 +129,22 @@ def generate_light_curves(
     ------
     light_curve : ApertureLightCurve
         Aperture light curves extracted from the source cutout with the ePSF parameters given.
+
+    Raises
+    ------
+    ValueError
+        If the ePSF's identifying metadata or cadence count doesn't match `source`, indicating a
+        mispaired source/ePSF file combination.
     """
+    if not epsf.matches_cutout(source):
+        raise ValueError(
+            "ePSF does not match source cutout: ePSF is for orbit "
+            f"{epsf.orbit} {epsf.camera}-{epsf.ccd} cutout ({epsf.cutout_x}, {epsf.cutout_y}) "
+            f"with {epsf.n_cadences} cadences, source cutout is orbit "
+            f"{source.orbit} {source.camera}-{source.ccd} cutout "
+            f"({source.cutout_x}, {source.cutout_y}) with {source.flux.shape[0]} cadences"
+        )
+
     tic_match_table = source.tic
     if tic_ids is not None:
         tic_match_table = tic_match_table[np.isin(tic_match_table["TIC"], tic_ids)]
@@ -157,10 +156,8 @@ def generate_light_curves(
     star_positions = np.array(
         [source.gaia[f"sector_{source.sector}_x"], source.gaia[f"sector_{source.sector}_y"]]
     ).T
-    design_matrix, _ = make_tglc_design_matrix(
+    design_matrix, _ = epsf.make_design_matrix(
         source.flux.shape[1:],
-        (psf_size, psf_size),
-        psf_oversample_factor,
         star_positions,
         source.gaia["tess_flux_ratio"].data,
         source.mask.data,
@@ -168,13 +165,18 @@ def generate_light_curves(
 
     # Use the model's flat background level to determine points that should be ignored during
     # normalization in photometry
-    flat_background = epsf[:, -6]
+    # NOTE: "y_strap" preserves the historical column choice (epsf[:, -6]), but the comment above
+    # suggests the "flat" column was intended. Changing it alters photometry normalization, so it
+    # is tracked as a follow-up investigation rather than fixed here.
+    flat_background = epsf.background_parameter("y_strap")
     high_background_points = np.abs(flat_background - np.nanmedian(flat_background)) >= mad_std(
         flat_background, ignore_nan=True
     )
 
     # These are used for all light curves
-    model_background = np.dot(design_matrix[:, -6:], epsf[:, -6:].T).T.reshape(source.flux.shape)
+    model_background = np.dot(
+        design_matrix[:, -epsf.n_background :], epsf.background_parameters.T
+    ).T.reshape(source.flux.shape)
     time = Time(source.time, format="tjd", scale="tdb")
     tess_spacecraft_position = get_tess_spacecraft_position(
         source.orbit, time, ephemerides_directory
@@ -208,8 +210,6 @@ def generate_light_curves(
             star_positions[i][0],
             star_positions[i][1],
             source.gaia["tess_flux_ratio"].data[i],
-            (psf_size, psf_size),
-            psf_oversample_factor,
             cutout_size=5,
         )
 
