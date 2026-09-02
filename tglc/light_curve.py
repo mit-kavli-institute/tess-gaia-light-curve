@@ -414,9 +414,7 @@ def generate_light_curves(
         return
     logger.debug(f"Making light curves for {tic_match_table} targets")
 
-    star_positions = np.array(
-        [source.gaia[f"sector_{source.sector}_x"], source.gaia[f"sector_{source.sector}_y"]]
-    ).T
+    star_positions = source.star_positions
     design_matrix, _ = epsf.make_design_matrix(
         source.flux.shape[1:],
         star_positions,
@@ -433,8 +431,8 @@ def generate_light_curves(
         source.orbit, time, ephemerides_directory
     )
 
-    nearest_pixel_x = np.round(source.gaia[f"sector_{source.sector}_x"]).astype(int)
-    nearest_pixel_y = np.round(source.gaia[f"sector_{source.sector}_y"]).astype(int)
+    nearest_pixel_x = np.round(star_positions[:, 0]).astype(int)
+    nearest_pixel_y = np.round(star_positions[:, 1]).astype(int)
     # Targets outside these bounds have too little data to make light curves
     pixel_left_bound = 1.5
     pixel_right_bound = source.size - 2.5

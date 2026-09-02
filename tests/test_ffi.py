@@ -1,5 +1,7 @@
 """Tests for the :class:`tglc.ffi.FFICutout` wrapper class."""
 
+import numpy as np
+
 from .synthetic_data import make_synthetic_cutout
 
 
@@ -16,3 +18,17 @@ def test_ffi_cutout_repr_legacy_missing_cutout_indices():
     del cutout.cutout_x
     del cutout.cutout_y
     assert "cutout (-1, -1)" in repr(cutout)
+
+
+def test_ffi_cutout_star_positions():
+    cutout = make_synthetic_cutout()
+
+    star_positions = cutout.star_positions
+
+    assert star_positions.shape == (4, 2)
+    np.testing.assert_array_equal(
+        star_positions,
+        np.array(
+            [cutout.gaia[f"sector_{cutout.sector}_x"], cutout.gaia[f"sector_{cutout.sector}_y"]]
+        ).T,
+    )

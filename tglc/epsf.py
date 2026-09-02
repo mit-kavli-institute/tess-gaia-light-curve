@@ -366,9 +366,7 @@ def fit_epsf_for_source(
     logger.debug(
         f"Fitting ePSF for source in {source.camera}-{source.ccd} at {source.ccd_x}, {source.ccd_y}"
     )
-    star_positions = np.array(
-        [source.gaia[f"sector_{source.sector}_x"], source.gaia[f"sector_{source.sector}_y"]]
-    ).T
+    star_positions = source.star_positions
     design_matrix, regularization_extension_size = make_tglc_design_matrix(
         source.flux.shape[1:],
         (psf_size, psf_size),

@@ -48,9 +48,7 @@ def _make_cutout_and_epsf():
 
 
 def _make_full_design_matrix(cutout, epsf):
-    star_positions = np.array(
-        [cutout.gaia[f"sector_{cutout.sector}_x"], cutout.gaia[f"sector_{cutout.sector}_y"]]
-    ).T
+    star_positions = cutout.star_positions
     design_matrix, _ = epsf.make_design_matrix(
         cutout.flux.shape[1:],
         star_positions,
