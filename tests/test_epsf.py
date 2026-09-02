@@ -339,3 +339,58 @@ def test_epsf_from_cutout_fit():
     assert (epsf.orbit, epsf.sector, epsf.camera, epsf.ccd) == (185, 89, 1, 1)
     assert (epsf.cutout_x, epsf.cutout_y) == (0, 0)
     assert epsf.matches_cutout(cutout)
+
+
+# ---------------------------------------------------------------------
+# Characterization tests pinning pre-refactor fit_epsf masking behavior
+# ---------------------------------------------------------------------
+
+
+def _small_fit_problem():
+    image_shape = (12, 12)
+    design_matrix, regularization_extension_size = make_tglc_design_matrix(
+        image_shape, (3, 3), 1, np.array([[5.0, 5.0]]), np.array([1.0]), np.zeros(image_shape), 1e-4
+    )
+    flux = np.ones(image_shape)
+    flux[4:7, 4:7] += 1.0
+    return design_matrix, regularization_extension_size, flux
+
+
+def test_fit_epsf_implicit_low_flux_mask_matches_manual_mask():
+    """Pins the implicit flux < 0.8 * nanmedian(flux) pixel cut inside fit_epsf.
+
+    Passing the same cut as the base mask must be a no-op, because fit_epsf unions the
+    base mask with the implicit cut. Any change to the implicit mask semantics breaks this.
+    """
+    design_matrix, regularization_extension_size, flux = _small_fit_problem()
+    flux[0:2, 0:2] = 0.1  # distinctly below 0.8 * median
+    manual_mask = flux < 0.8 * np.nanmedian(flux)
+
+    default_result = fit_epsf(
+        design_matrix, flux, np.zeros(flux.shape, dtype=bool), 1.4, regularization_extension_size
+    )
+    manual_result = fit_epsf(design_matrix, flux, manual_mask, 1.4, regularization_extension_size)
+
+    np.testing.assert_array_equal(default_result, manual_result)
+
+
+def test_fit_epsf_nan_pixel_is_not_masked():
+    """Pins that NaN flux pixels are NOT excluded by the implicit mask (NaN < x is False).
+
+    An unmasked NaN pixel propagates through the normal equations and produces all-NaN
+    parameters for the cadence; masking the pixel explicitly restores a finite fit.
+    """
+    design_matrix, regularization_extension_size, flux = _small_fit_problem()
+    flux[0, 0] = np.nan
+
+    nan_result = fit_epsf(
+        design_matrix, flux, np.zeros(flux.shape, dtype=bool), 1.4, regularization_extension_size
+    )
+    assert np.isnan(nan_result).all()
+
+    mask_nan_pixel = np.zeros(flux.shape, dtype=bool)
+    mask_nan_pixel[0, 0] = True
+    masked_result = fit_epsf(
+        design_matrix, flux, mask_nan_pixel, 1.4, regularization_extension_size
+    )
+    assert np.isfinite(masked_result).all()
