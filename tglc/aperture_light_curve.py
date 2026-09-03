@@ -66,10 +66,11 @@ class ApertureLightCurve(TimeSeries):
         "cadence",
         "quality_flag",
         "background_flux",
+        "epsf_flux_fraction",
     ] + [
         f"{aperture_name}_aperture_{data_name}"
         for aperture_name in ["primary", "small", "large"]
-        for data_name in ["magnitude", "centroid_x", "centroid_y"]
+        for data_name in ["magnitude", "raw_flux", "centroid_x", "centroid_y"]
     ]
     _required_metadata = [field.name for field in fields(ApertureLightCurveMetadata)]
 

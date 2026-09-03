@@ -12,6 +12,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 
+from tglc.aperture_photometry import get_expected_total_flux
 from tglc.epsf import EPSF
 from tglc.light_curve import (
     CutoutWindow,
@@ -22,6 +23,7 @@ from tglc.light_curve import (
     get_cutout_for_light_curve,
     get_cutout_window,
     get_design_matrix_rows_for_window,
+    get_epsf_flux_fraction,
     get_high_background_cadence_mask,
     get_psf_portion,
     make_field_design_matrix,
@@ -366,3 +368,54 @@ def test_get_background_outlier_mask_nan_disables_all_flags():
     background = np.array([10.0, 10.1, 9.9, 500.0, np.nan])
 
     np.testing.assert_array_equal(get_background_outlier_mask(background), [False] * 5)
+
+
+# ---------------------------------------------------------------------
+# ePSF flux fraction (multiplicative normalization / health factor)
+# ---------------------------------------------------------------------
+
+
+def test_get_epsf_flux_fraction():
+    model = np.zeros((3, 2, 2))
+    model[0] = [[1.0, 2.0], [3.0, 4.0]]  # sum 10
+    model[1] = [[2.0, np.nan], [2.0, 2.0]]  # nansum 6
+    model[2] = np.nan  # failed-fit cadence -> 0
+
+    np.testing.assert_array_equal(get_epsf_flux_fraction(model, 20.0), [0.5, 0.3, 0.0])
+
+
+def test_generate_light_curves_epsf_flux_fraction_and_raw_flux(monkeypatch):
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    cutout, epsf = _make_cutout_and_epsf()
+
+    light_curve = next(generate_light_curves(cutout, epsf, Path("/nonexistent")))
+
+    # The normalized column is exactly raw_flux - local_background (no clipped cadences here)
+    for aperture_name in ("primary", "small", "large"):
+        np.testing.assert_array_equal(
+            light_curve[f"{aperture_name}_aperture_flux"],
+            light_curve[f"{aperture_name}_aperture_raw_flux"]
+            - light_curve.meta[f"{aperture_name}_aperture_local_background"],
+        )
+
+    # epsf_flux_fraction matches a manual recomputation via the step functions for star 1
+    epsf_flux_fraction = light_curve["epsf_flux_fraction"]
+    assert epsf_flux_fraction.shape == (5,)
+    assert np.isfinite(epsf_flux_fraction).all()
+    target_x, target_y = cutout.star_positions[0]
+    window = get_cutout_window(target_x, target_y, cutout.flux.shape[1:], cutout_size=5)
+    target_design_matrix = make_target_design_matrix(
+        epsf,
+        window.shape,
+        target_x - window.left,
+        target_y - window.bottom,
+        cutout.gaia["tess_flux_ratio"].data[0],
+    )
+    target_psf_model = evaluate_epsf_model(target_design_matrix, epsf.psf_parameters, window.shape)
+    np.testing.assert_array_equal(
+        epsf_flux_fraction,
+        get_epsf_flux_fraction(
+            target_psf_model,
+            get_expected_total_flux(cutout.gaia["tess_mag"][0], cutout.exposure),
+        ),
+    )
