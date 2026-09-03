@@ -309,3 +309,31 @@ def test_get_flux_portion_in_aperture():
     flux_portion = np.full((4, 4), 1 / 16)
 
     assert get_flux_portion_in_aperture(flux_portion, (0, 2, 0, 2)) == 4 / 16
+
+
+def test_get_normalized_aperture_photometry_raw_flux_column():
+    """raw_flux is the saturation-masked aperture sum: not background-shifted, not clipped."""
+    star_flux = 15_000.0 * 200.0
+    images = np.full((5, 5, 5), star_flux / 25 + 100.0)
+    images[0, 2, 1] += 500.0
+    images[1, :, :] = 1.0  # flagged cadence, clipped to NaN in the normalized column
+    images[4, :, :] = 5.0e7  # saturated -> NaN in both columns
+    quality_flags = np.array([0, 1, 0, 2, 0])
+    flux_portion = np.full((5, 5), 1 / 25)
+
+    photometry_data = get_normalized_aperture_photometry(
+        images, quality_flags, 3, 2, 2, 10.0, 200 * u.second, flux_portion=flux_portion
+    )
+
+    raw_flux = photometry_data["raw_flux"]
+    measured = measure_aperture_flux(images, (1, 4, 1, 4))
+    measured[get_saturation_mask(measured, 3, 200.0)] = np.nan
+    np.testing.assert_array_equal(raw_flux.value, measured)
+    # The clipped cadence is NaN in the normalized column but finite in raw_flux
+    assert np.isnan(photometry_data["flux"][1]) and np.isfinite(raw_flux[1])
+    # The normalized column is exactly raw_flux - local_background where not clipped
+    unclipped = np.isfinite(photometry_data["flux"])
+    np.testing.assert_array_equal(
+        photometry_data["flux"][unclipped],
+        (raw_flux - photometry_data.meta["local_background"])[unclipped],
+    )

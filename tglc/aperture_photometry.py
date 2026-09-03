@@ -248,6 +248,10 @@ def get_normalized_aperture_photometry(
 
         Columns:
         - `"{column_name_prefix}flux"`: Normalized total flux value in aperture, or NaN if saturated
+        - `"{column_name_prefix}raw_flux"`: Un-normalized total flux value in aperture (saturated
+          cadences are NaN, but no background shift or non-positive clip is applied). Relates to
+          the normalized column by `flux = raw_flux - local_background`, except where the
+          non-positive clip produced NaN.
         - `"{column_name_prefix}magnitude"`: Normalized magnitude value for aperture, or NaN if
           saturated
         - `"{column_name_prefix}centroid_x"`: X coordinate in image of flux-weighted aperture centroid
@@ -265,6 +269,8 @@ def get_normalized_aperture_photometry(
     is_saturated = get_saturation_mask(flux, aperture_size, exposure_time_seconds)
     flux[is_saturated] = np.nan
     centroids[is_saturated, :] = np.nan
+    # Raw flux: saturation-masked, but not background-shifted or non-positive-clipped
+    raw_flux = flux.copy() * u.electron
 
     flux_portion_in_aperture = get_flux_portion_in_aperture(flux_portion, aperture_limits)
     expected_aperture_flux = (
@@ -278,6 +284,7 @@ def get_normalized_aperture_photometry(
     table = QTable(
         {
             f"{column_name_prefix}flux": flux,
+            f"{column_name_prefix}raw_flux": raw_flux,
             f"{column_name_prefix}magnitude": convert_tess_flux_to_tess_magnitude(
                 flux / flux_portion_in_aperture / exposure_time
             ),

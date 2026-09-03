@@ -14,7 +14,7 @@ import astropy.units as u
 import numpy as np
 
 from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
-from tglc.aperture_photometry import get_normalized_aperture_photometry
+from tglc.aperture_photometry import get_expected_total_flux, get_normalized_aperture_photometry
 from tglc.epsf import EPSF
 from tglc.ffi import FFICutout
 from tglc.utils.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
@@ -212,6 +212,37 @@ def get_psf_portion(target_psf_model: np.ndarray) -> np.ndarray:
         `tglc.aperture_photometry.get_normalized_aperture_photometry`.
     """
     return np.nansum(target_psf_model, axis=0) / np.nansum(target_psf_model)
+
+
+def get_epsf_flux_fraction(target_psf_model: np.ndarray, expected_total_flux: float) -> np.ndarray:
+    """
+    Per-cadence fraction of a target's catalog-expected flux captured by the fitted ePSF.
+
+    The ePSF fit absorbs TESS's optical throughput loss multiplicatively: toward the camera
+    edge, the fitted PSF's integrated response per unit catalog flux is systematically lower
+    than near the center. Because the fit's star flux ratios are normalized per cutout (to the
+    brightest star in the cutout), raw fitted-PSF totals are not comparable across cutouts;
+    dividing the modeled target flux by the catalog-expected flux anchors the value, making it
+    comparable across cutouts and cameras. This is the multiplicative counterpart of the
+    additive ``local_background`` offset recorded by
+    `tglc.aperture_photometry.get_normalized_aperture_photometry`.
+
+    Parameters
+    ----------
+    target_psf_model : array
+        Per-cadence forward model of the target star alone, with shape `(t, height, width)`,
+        from :func:`evaluate_epsf_model` with `epsf.psf_parameters`.
+    expected_total_flux : float
+        Catalog-expected total flux of the target in electrons per cadence, from
+        `tglc.aperture_photometry.get_expected_total_flux`.
+
+    Returns
+    -------
+    epsf_flux_fraction : array
+        1D dimensionless array with one entry per cadence. Cadences whose ePSF fit failed
+        (rows of NaN) yield 0 from the NaN-ignoring sum.
+    """
+    return np.nansum(target_psf_model, axis=(1, 2)) / expected_total_flux
 
 
 def get_cutout_for_light_curve(
@@ -452,14 +483,30 @@ def generate_light_curves(
         ):
             continue
 
-        light_curve_cutout, star_x, star_y, psf_portions = get_cutout_for_light_curve(
-            source.flux,
-            epsf,
-            design_matrix,
-            star_positions[i][0],
-            star_positions[i][1],
-            source.gaia["tess_flux_ratio"].data[i],
-            cutout_size=5,
+        # Compose the cutout steps directly (rather than calling get_cutout_for_light_curve) so
+        # the target PSF model cube is available for the ePSF flux fraction below.
+        window = get_cutout_window(
+            star_positions[i][0], star_positions[i][1], source.flux.shape[1:], cutout_size=5
+        )
+        star_x = star_positions[i][0] - window.left
+        star_y = star_positions[i][1] - window.bottom
+        target_design_matrix = make_target_design_matrix(
+            epsf, window.shape, star_x, star_y, source.gaia["tess_flux_ratio"].data[i]
+        )
+        field_design_matrix = make_field_design_matrix(
+            design_matrix[get_design_matrix_rows_for_window(window, source.flux.shape[2])],
+            target_design_matrix,
+        )
+        # The field model includes the background model, so this subtraction removes both.
+        light_curve_cutout = source.flux[
+            :, window.bottom : window.top, window.left : window.right
+        ] - evaluate_epsf_model(field_design_matrix, epsf.array, window.shape)
+        cutout_target_psf = evaluate_epsf_model(
+            target_design_matrix, epsf.psf_parameters, window.shape
+        )
+        psf_portions = get_psf_portion(cutout_target_psf)
+        epsf_flux_fraction = get_epsf_flux_fraction(
+            cutout_target_psf, get_expected_total_flux(source.gaia["tess_mag"][i], source.exposure)
         )
 
         sky_coord = SkyCoord(source.gaia["ra"][i], source.gaia["dec"][i], unit="deg")
@@ -526,6 +573,7 @@ def generate_light_curves(
                 # Use 2 for background quality flags to avoid conflicting with QLP quality flags
                 "quality_flag": background_quality_flags.astype(int) * 2,
                 "background_flux": background_light_curve,
+                "epsf_flux_fraction": epsf_flux_fraction,
             }
         )
 
