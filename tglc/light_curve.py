@@ -14,7 +14,11 @@ import astropy.units as u
 import numpy as np
 
 from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
-from tglc.aperture_photometry import get_expected_total_flux, get_normalized_aperture_photometry
+from tglc.aperture_photometry import (
+    get_aperture_photometry,
+    get_expected_total_flux,
+    normalize_photometry,
+)
 from tglc.epsf import EPSF
 from tglc.ffi import FFICutout
 from tglc.utils.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
@@ -209,7 +213,7 @@ def get_psf_portion(target_psf_model: np.ndarray) -> np.ndarray:
     -------
     psf_portion : array
         2D `(height, width)` array on the cutout grid whose entries sum to 1, as required by
-        `tglc.aperture_photometry.get_normalized_aperture_photometry`.
+        `tglc.aperture_photometry.normalize_photometry`.
     """
     return np.nansum(target_psf_model, axis=0) / np.nansum(target_psf_model)
 
@@ -225,7 +229,7 @@ def get_epsf_flux_fraction(target_psf_model: np.ndarray, expected_total_flux: fl
     dividing the modeled target flux by the catalog-expected flux anchors the value, making it
     comparable across cutouts and cameras. This is the multiplicative counterpart of the
     additive ``local_background`` offset recorded by
-    `tglc.aperture_photometry.get_normalized_aperture_photometry`.
+    `tglc.aperture_photometry.normalize_photometry`.
 
     Parameters
     ----------
@@ -323,7 +327,7 @@ def get_high_background_cadence_mask(epsf: EPSF) -> np.ndarray:
 
     Cadences deviating from the median by at least 1 MAD-standard-deviation are flagged. The
     flagged cadences are excluded from the photometric normalization in
-    `tglc.aperture_photometry.get_normalized_aperture_photometry`.
+    `tglc.aperture_photometry.normalize_photometry`.
 
     Parameters
     ----------
@@ -512,16 +516,21 @@ def generate_light_curves(
         sky_coord = SkyCoord(source.gaia["ra"][i], source.gaia["dec"][i], unit="deg")
         time_btjd = apply_barycentric_correction(time, sky_coord, tess_spacecraft_position)
         aperture_photometry_data = [
-            get_normalized_aperture_photometry(
-                light_curve_cutout,
+            normalize_photometry(
+                get_aperture_photometry(
+                    light_curve_cutout,
+                    aperture_size,
+                    round(star_x),
+                    round(star_y),
+                    source.exposure * u.second,
+                    column_name_prefix=f"{aperture_name}_aperture_",
+                ),
                 np.array(source.quality) | high_background_points,
-                aperture_size,
-                round(star_x),
-                round(star_y),
                 source.gaia["tess_mag"][i],
                 source.exposure * u.second,
                 psf_portions,
                 column_name_prefix=f"{aperture_name}_aperture_",
+                inplace=True,  # the measurement table is loop-local; mutating avoids a copy
             )
             for aperture_name, aperture_size in LIGHT_CURVE_APERTURES
         ]

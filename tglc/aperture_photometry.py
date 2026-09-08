@@ -2,8 +2,9 @@
 
 The individual measurement and normalization steps are exposed as pure functions operating on
 plain numpy arrays so that experiments and diagnostics can run any step in isolation (e.g., to
-inspect the raw, pre-normalization aperture flux). :func:`get_normalized_aperture_photometry`
-composes them into the pipeline's photometry product.
+inspect the raw, pre-normalization aperture flux). :func:`get_aperture_photometry` composes
+the measurement steps, and :func:`normalize_photometry` adds the normalized flux and magnitude
+products on top.
 """
 
 from astropy import units as u
@@ -40,7 +41,7 @@ def measure_aperture_flux(
     Measure the raw per-cadence flux summed over an aperture window.
 
     This is the un-normalized aperture flux in electrons, before saturation masking and before
-    the local-background normalization applied by :func:`get_normalized_aperture_photometry`.
+    the local-background normalization applied by :func:`normalize_photometry`.
 
     Parameters
     ----------
@@ -191,74 +192,51 @@ def normalize_aperture_flux(flux: np.ndarray, local_background: float) -> np.nda
     return flux
 
 
-def get_normalized_aperture_photometry(
+def get_aperture_photometry(
     images: np.ndarray,
-    quality_flags: np.ndarray,
     aperture_size: int,
     x: int,
     y: int,
-    tmag: float,
     exposure_time: u.Quantity,
-    flux_portion: np.ndarray,
     column_name_prefix: str = "",
 ) -> QTable:
     """
-    Extract normalized magnitude light curve from time series of images.
+    Extract raw aperture photometry from a time series of images.
 
-    Composes the module's measurement and normalization steps; call them directly to obtain
-    intermediates such as the raw aperture flux or the saturation mask. Flux is extracted via
-    aperture photometry from the images and converted to TESS magnitude based on the reference
-    flux of 15,000 e-/s for a star of TESS magnitude 10 given in the TESS Instrument Handbook,
-    p. 37. The flux is then normalized to have its median at the expected flux for the target
-    TESS magnitude, and the residual is recorded as the local background level for the light
-    curve.
+    The measurement phase only: aperture sums, flux-weighted centroids, and saturation masking.
+    No normalization is applied; see :func:`normalize_photometry` for the normalized flux and
+    magnitude columns.
 
     Saturated points are removed; see :func:`get_saturation_mask`.
-
-    See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
 
     Parameters
     ----------
     images : array_like
         3 dimensional array with time as first dimension and image cutouts as remaining dimensions.
-    quality_flags : array_like[int]
-        Quality flags for the cadences, where 0 indicates a good value.
     aperture_size : int
         Side length of square aperture to use.
     x, y : int
         Aperture center coordinates in images.
-    tmag : float
-        TESS magnitude of target star.
     exposure_time : u.Quantity (time)
-        Exposure time for each light curve value. Used to determine saturated points. Converted
-        to seconds once up front; for values expressed in seconds (as everywhere in the
-        pipeline) this is exact.
-    flux_portion : array_like
-        Proportion of flux in each pixel of the images. Should be a 2D array with shape matching the
-        last two dimensions of `images`, and entries that sum to 1.
+        Exposure time for each light curve value. Used to determine saturated points.
     column_name_prefix : str
         Prefix inserted into column names. Default is no prefix.
 
     Returns
     -------
     photometry_data : QTable
-        Table with magnitudes extracted from photometry and flux-weighted centroid of the aperture,
-        in the coordinate system of the images. The table metadata contains the local background
-        level determined during normalization.
+        Table with raw aperture photometry, in the coordinate system of the images.
 
         Columns:
-        - `"{column_name_prefix}flux"`: Normalized total flux value in aperture, or NaN if saturated
-        - `"{column_name_prefix}raw_flux"`: Un-normalized total flux value in aperture (saturated
-          cadences are NaN, but no background shift or non-positive clip is applied). Relates to
-          the normalized column by `flux = raw_flux - local_background`, except where the
-          non-positive clip produced NaN.
-        - `"{column_name_prefix}magnitude"`: Normalized magnitude value for aperture, or NaN if
-          saturated
+        - `"{column_name_prefix}raw_flux"`: Un-normalized total flux value in aperture, or NaN if
+          saturated. No background shift or non-positive clip is applied.
         - `"{column_name_prefix}centroid_x"`: X coordinate in image of flux-weighted aperture centroid
         - `"{column_name_prefix}centroid_y"`: Y coordinate in image of flux-weighted aperture centroid
 
         Metadata:
-        - `"local_background"`: Local background flux level used in normalization.
+        - `"{column_name_prefix}aperture_limits"`: The (bottom, top, left, right) aperture window
+          used, derived by :func:`get_aperture_limits` (silently clamped at image edges).
+          :func:`normalize_photometry` reads it to crop the flux-portion map consistently.
     """
     aperture_limits = get_aperture_limits(aperture_size, x, y, images.shape[1], images.shape[2])
     exposure_time_seconds = exposure_time.to_value(u.second)
@@ -269,29 +247,92 @@ def get_normalized_aperture_photometry(
     is_saturated = get_saturation_mask(flux, aperture_size, exposure_time_seconds)
     flux[is_saturated] = np.nan
     centroids[is_saturated, :] = np.nan
-    # Raw flux: saturation-masked, but not background-shifted or non-positive-clipped
-    raw_flux = flux.copy() * u.electron
+    centroids = centroids * u.pixel
+
+    return QTable(
+        {
+            f"{column_name_prefix}raw_flux": flux * u.electron,
+            f"{column_name_prefix}centroid_x": centroids[:, 1],
+            f"{column_name_prefix}centroid_y": centroids[:, 0],
+        },
+        meta={f"{column_name_prefix}aperture_limits": aperture_limits},
+    )
+
+
+def normalize_photometry(
+    photometry: QTable,
+    quality_flags: np.ndarray,
+    tmag: float,
+    exposure_time: u.Quantity,
+    flux_portion: np.ndarray,
+    column_name_prefix: str = "",
+    inplace: bool = False,
+) -> QTable:
+    """
+    Add normalized flux and magnitude columns to raw aperture photometry.
+
+    The normalization phase: shifts the raw aperture flux by a single scalar (the "local
+    background") so that its good-cadence median lands on the flux expected in the aperture for
+    the target's TESS magnitude, based on the reference flux of 15,000 e-/s for a star of TESS
+    magnitude 10 given in the TESS Instrument Handbook, p. 37. The shift is additive and
+    recorded in the table metadata, so `flux = raw_flux - local_background` (except where the
+    non-positive clip produced NaN) and absolute photometry is recoverable from `raw_flux`.
+
+    See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
+
+    Parameters
+    ----------
+    photometry : QTable
+        Raw aperture photometry from :func:`get_aperture_photometry` (with the same
+        `column_name_prefix`); its `raw_flux` column and `aperture_limits` metadata are read.
+    quality_flags : array_like[int]
+        Quality flags for the cadences, where 0 indicates a good value. Only good cadences
+        contribute to the normalization level.
+    tmag : float
+        TESS magnitude of target star.
+    exposure_time : u.Quantity (time)
+        Exposure time for each light curve value.
+    flux_portion : array_like
+        Proportion of flux in each pixel of the images the photometry was measured from. Should
+        be a 2D array with shape matching the images, and entries that sum to 1.
+    column_name_prefix : str
+        Prefix inserted into column names. Default is no prefix.
+    inplace : bool
+        If `True`, add the new columns and metadata to `photometry` itself; if `False` (the
+        default), operate on a copy. The resulting table is returned either way.
+
+    Returns
+    -------
+    photometry_data : QTable
+        The input table (or a copy of it) with normalization products added.
+
+        Columns added:
+        - `"{column_name_prefix}flux"`: Normalized total flux value in aperture. NaN where
+          saturated or where the normalized value was non-positive (clipped to prevent runtime
+          warnings converting to magnitude).
+        - `"{column_name_prefix}magnitude"`: Normalized magnitude value for aperture, or NaN if
+          saturated
+
+        Metadata added:
+        - `"{column_name_prefix}local_background"`: Local background flux level used in
+          normalization.
+    """
+    if not inplace:
+        photometry = photometry.copy()
+    raw_flux = photometry[f"{column_name_prefix}raw_flux"].to_value(u.electron)
+    aperture_limits = photometry.meta[f"{column_name_prefix}aperture_limits"]
+    exposure_time_seconds = exposure_time.to_value(u.second)
 
     flux_portion_in_aperture = get_flux_portion_in_aperture(flux_portion, aperture_limits)
     expected_aperture_flux = (
         get_expected_total_flux(tmag, exposure_time_seconds) * flux_portion_in_aperture
     )
-    local_background = get_local_background(flux, quality_flags, expected_aperture_flux)
-    flux = normalize_aperture_flux(flux, local_background) * u.electron
-    centroids = centroids * u.pixel
-    local_background = local_background * u.electron
+    local_background = get_local_background(raw_flux, quality_flags, expected_aperture_flux)
+    flux = normalize_aperture_flux(raw_flux, local_background) * u.electron
 
-    table = QTable(
-        {
-            f"{column_name_prefix}flux": flux,
-            f"{column_name_prefix}raw_flux": raw_flux,
-            f"{column_name_prefix}magnitude": convert_tess_flux_to_tess_magnitude(
-                flux / flux_portion_in_aperture / exposure_time
-            ),
-            f"{column_name_prefix}centroid_x": centroids[:, 1],
-            f"{column_name_prefix}centroid_y": centroids[:, 0],
-        },
-        meta={f"{column_name_prefix}local_background": local_background},
+    photometry[f"{column_name_prefix}flux"] = flux
+    photometry[f"{column_name_prefix}magnitude"] = convert_tess_flux_to_tess_magnitude(
+        flux / flux_portion_in_aperture / exposure_time
     )
-
-    return table
+    photometry.meta[f"{column_name_prefix}local_background"] = local_background * u.electron
+    return photometry

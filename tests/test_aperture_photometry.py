@@ -8,14 +8,42 @@ import numpy as np
 import pytest
 
 from tglc.aperture_photometry import (
+    get_aperture_photometry,
     get_flux_portion_in_aperture,
     get_local_background,
-    get_normalized_aperture_photometry,
     get_saturation_mask,
     measure_aperture_centroids,
     measure_aperture_flux,
     normalize_aperture_flux,
+    normalize_photometry,
 )
+
+
+def _get_normalized_aperture_photometry(
+    images,
+    quality_flags,
+    aperture_size,
+    x,
+    y,
+    tmag,
+    exposure_time,
+    flux_portion,
+    column_name_prefix="",
+):
+    """Two-step composition reproducing the removed single-call API.
+
+    Kept so every golden value and assertion in this module stays verbatim from when they
+    were generated against the single get_normalized_aperture_photometry function.
+    """
+    return normalize_photometry(
+        get_aperture_photometry(images, aperture_size, x, y, exposure_time, column_name_prefix),
+        quality_flags,
+        tmag,
+        exposure_time,
+        flux_portion,
+        column_name_prefix,
+        inplace=True,
+    )
 
 
 def test_get_normalized_aperture_photometry():
@@ -25,7 +53,7 @@ def test_get_normalized_aperture_photometry():
     flux_portion = np.ones((5, 5)) / (5 * 5)
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 2, 2, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.all(photometry_data["magnitude"] == 10)
@@ -42,7 +70,7 @@ def test_get_normalized_aperture_photometry_with_bottom_heavy_image():
     flux_portion = np.pad(np.ones((3, 5)) / (5 * 3), [(0, 2), (0, 0)])
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 2, 2, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.all(photometry_data["magnitude"] == 10)
@@ -59,7 +87,7 @@ def test_get_normalized_aperture_photometry_with_left_heavy_image():
     flux_portion = np.pad(np.ones((5, 3)) / (5 * 3), [(0, 0), (0, 2)])
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 2, 2, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.all(photometry_data["magnitude"] == 10)
@@ -75,7 +103,7 @@ def test_get_normalized_aperture_photometr_with_local_background():
     flux_portion = np.ones((5, 5)) / (5 * 5)
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 2, 2, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.all(photometry_data["magnitude"] == 10)
@@ -92,7 +120,7 @@ def test_get_normalized_aperture_photometr_with_fully_saturated_first_image():
     flux_portion = np.ones((5, 5)) / (5 * 5)
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 2, 2, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.isnan(photometry_data["magnitude"][0])
@@ -111,7 +139,7 @@ def test_get_normalized_aperture_photometry_with_large_aperture():
     flux_portion = np.ones((5, 5)) / (5 * 5)
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 5, 2, 2, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.all(photometry_data["magnitude"] == 10)
@@ -127,7 +155,7 @@ def test_get_normalized_aperture_photometry_with_small_aperture():
     flux_portion = np.ones((5, 5)) / (5 * 5)
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 1, 2, 2, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.all(photometry_data["magnitude"] == 10)
@@ -143,7 +171,7 @@ def test_get_normalized_aperture_photometry_with_star_near_edge():
     flux_portion = np.ones((5, 5)) / (5 * 5)
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 0, 0, 10, 200 * u.second, flux_portion=flux_portion
     )
     assert np.all(photometry_data["magnitude"] == 10)
@@ -159,7 +187,7 @@ def test_get_normalized_aperture_photometry_with_colname_prefix():
     flux_portion = np.ones((5, 5)) / (5 * 5)
     quality_flags = np.zeros(5, dtype=int)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images,
         quality_flags,
         3,
@@ -193,7 +221,7 @@ def test_get_normalized_aperture_photometry_characterization():
     quality_flags = np.array([0, 1, 0, 2, 0])
     flux_portion = np.full((5, 5), 1 / 25)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 2, 2, 10.0, 200 * u.second, flux_portion=flux_portion
     )
 
@@ -218,7 +246,7 @@ def test_get_normalized_aperture_photometry_characterization_edge_clamped():
     images[1, 0, 1] += 200.0
     flux_portion = np.full((5, 5), 1 / 25)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, np.zeros(3, dtype=int), 3, 0, 0, 10.0, 200 * u.second, flux_portion=flux_portion
     )
 
@@ -321,7 +349,7 @@ def test_get_normalized_aperture_photometry_raw_flux_column():
     quality_flags = np.array([0, 1, 0, 2, 0])
     flux_portion = np.full((5, 5), 1 / 25)
 
-    photometry_data = get_normalized_aperture_photometry(
+    photometry_data = _get_normalized_aperture_photometry(
         images, quality_flags, 3, 2, 2, 10.0, 200 * u.second, flux_portion=flux_portion
     )
 
@@ -337,3 +365,56 @@ def test_get_normalized_aperture_photometry_raw_flux_column():
         photometry_data["flux"][unclipped],
         (raw_flux - photometry_data.meta["local_background"])[unclipped],
     )
+
+
+# ---------------------------------------------------------------------
+# Split measurement / normalization API
+# ---------------------------------------------------------------------
+
+
+def test_get_aperture_photometry_measurement_only():
+    star_flux = 15_000.0 * 200.0
+    images = np.full((3, 5, 5), star_flux / 25)
+    images[1, :, :] = 5.0e7  # saturated cadence
+
+    photometry = get_aperture_photometry(images, 3, 2, 2, 200 * u.second)
+
+    assert set(photometry.colnames) == {"raw_flux", "centroid_x", "centroid_y"}
+    assert photometry.meta["aperture_limits"] == (1, 4, 1, 4)
+    np.testing.assert_array_equal(
+        photometry["raw_flux"].value, [star_flux * 9 / 25, np.nan, star_flux * 9 / 25]
+    )
+    assert np.isnan(photometry["centroid_x"][1])
+
+
+def test_normalize_photometry_returns_copy_by_default():
+    images = np.ones((5, 5, 5)) * 15_000 * 200 / (5 * 5)
+    flux_portion = np.ones((5, 5)) / (5 * 5)
+    photometry = get_aperture_photometry(images, 3, 2, 2, 200 * u.second)
+
+    normalized = normalize_photometry(
+        photometry, np.zeros(5, dtype=int), 10, 200 * u.second, flux_portion
+    )
+
+    assert normalized is not photometry
+    # The input table is untouched
+    assert "flux" not in photometry.colnames
+    assert "local_background" not in photometry.meta
+    # The returned copy has the normalization products
+    assert "flux" in normalized.colnames and "magnitude" in normalized.colnames
+    np.testing.assert_array_equal(normalized["raw_flux"], photometry["raw_flux"])
+    assert normalized.meta["local_background"] == 0 * u.electron
+
+
+def test_normalize_photometry_inplace_mutates_and_returns_input():
+    images = np.ones((5, 5, 5)) * 15_000 * 200 / (5 * 5)
+    flux_portion = np.ones((5, 5)) / (5 * 5)
+    photometry = get_aperture_photometry(images, 3, 2, 2, 200 * u.second)
+
+    normalized = normalize_photometry(
+        photometry, np.zeros(5, dtype=int), 10, 200 * u.second, flux_portion, inplace=True
+    )
+
+    assert normalized is photometry
+    assert "flux" in photometry.colnames and "magnitude" in photometry.colnames
+    assert photometry.meta["local_background"] == 0 * u.electron
