@@ -113,6 +113,80 @@ def test_make_tglc_design_matrix_models_image():
     np.testing.assert_equal(modeled_image, ones_around_star)
 
 
+def test_make_tglc_design_matrix_bilinear_weights_at_subpixel_position():
+    """The nearest PSF grid node gets the largest interpolation weight.
+
+    Regression test for issue #23, where the weights were inverted (each node was weighted by
+    the distance to itself instead of ``1 - distance``). Stars at half-integer positions land
+    exactly on grid nodes and cannot distinguish the two, so this uses a generic sub-pixel
+    position.
+    """
+    image_shape = (21, 21)
+    star_positions = np.array([[10.1, 10.0]])
+
+    design_matrix, _ = make_tglc_design_matrix(
+        image_shape, (11, 11), 2, star_positions, np.array([1.0])
+    )
+
+    pixel_row = design_matrix[10 * image_shape[1] + 10].reshape(23, 23)
+    # Pixel (10, 10) is at PSF grid coordinate (10.8, 11): exactly on a node in y, and in x
+    # between node 10 (distance 0.8) and node 11 (distance 0.2)
+    np.testing.assert_allclose(pixel_row[11, 11], 0.8)
+    np.testing.assert_allclose(pixel_row[11, 10], 0.2)
+
+
+def test_fit_epsf_recovers_flux_at_subpixel_positions():
+    """A fitted ePSF forward model reproduces stellar flux for stars off the PSF grid nodes.
+
+    Regression test for issue #23: with inverted interpolation weights, the fitted model
+    captured only about half of each star's flux.
+    """
+    rng = np.random.default_rng(31415)
+    image_shape = (40, 40)
+    n_stars = 25
+    star_x = rng.uniform(4.0, 35.0, n_stars)
+    star_y = rng.uniform(4.0, 35.0, n_stars)
+    star_flux = rng.uniform(1_000.0, 20_000.0, n_stars)
+    background_level = 20.0
+    sigma = 0.65
+
+    pixel_y, pixel_x = np.mgrid[0 : image_shape[0], 0 : image_shape[1]]
+    image = np.full(image_shape, background_level)
+    for x, y, flux in zip(star_x, star_y, star_flux):
+        image += (
+            flux
+            / (2 * np.pi * sigma**2)
+            * np.exp(-((pixel_x - x) ** 2 + (pixel_y - y) ** 2) / (2 * sigma**2))
+        )
+
+    star_positions = np.column_stack([star_x, star_y])
+    flux_ratios = star_flux / star_flux.max()
+    fit_design_matrix, regularization_extension_size = make_tglc_design_matrix(
+        image_shape,
+        (11, 11),
+        2,
+        star_positions,
+        flux_ratios,
+        np.zeros(image_shape),
+        1e-4,
+    )
+    parameters = fit_epsf(
+        fit_design_matrix,
+        image,
+        np.zeros(image_shape, dtype=bool),
+        1.4,
+        regularization_extension_size,
+    )
+
+    forward_design_matrix, _ = make_tglc_design_matrix(
+        image_shape, (11, 11), 2, star_positions, flux_ratios
+    )
+    psf_model = np.dot(forward_design_matrix, parameters[:-6]).reshape(image_shape)
+
+    star_flux_in_image = image.sum() - background_level * image.size
+    assert 0.9 < psf_model.sum() / star_flux_in_image < 1.1
+
+
 def test_fit_epsf():
     # Actual expected values
     image_shape = (150, 150)

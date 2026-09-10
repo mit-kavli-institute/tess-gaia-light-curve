@@ -125,31 +125,26 @@ def make_tglc_design_matrix(
                 # The four closest PSF points are bilinearly interpolated to give the PSF model
                 # value of the pixel, and their coordinates are given by rounding the pixel center
                 # coordinates up and down. The contribution from each pixel is the weight it is
-                # given in the bilinear interpolation, which is the product of the distances in the
-                # x and y directions. We further weight the contribution in importance by the flux
-                # ratio of the current star.
+                # given in the bilinear interpolation, which is the product over the x and y
+                # directions of one minus the distance to the pixel center. We further weight the
+                # contribution in importance by the flux ratio of the current star.
                 for psf_x, psf_y in [
                     (floor(pixel_psf_x), floor(pixel_psf_y)),
                     (floor(pixel_psf_x), ceil(pixel_psf_y)),
                     (ceil(pixel_psf_x), floor(pixel_psf_y)),
                     (ceil(pixel_psf_x), ceil(pixel_psf_y)),
                 ]:
-                    # Naively, the interpolation weight is:
-                    #   np.abs(pixel_psf_x - psf_x) * np.abs(pixel_psf_y - psf_y)
-                    # If the pixel lies on a PSF pixel boundary, one of these terms will vanish. But
-                    # that actually means we are only interpolating between two pixel centers on a
-                    # line, instead of four on a square. Those points will get double counted
-                    # because ceil and floor will give the same result, so we use 0.5 as the weight
-                    # to correct that.
-                    # NOTE: these weights are inverted relative to standard bilinear interpolation:
-                    # each node is weighted by the distance to *itself* instead of to the opposite
-                    # node (1 - |distance|), so the nearest node gets the least weight. The
-                    # original TGLC's effective_psf.bilinear() uses the standard weights, and the
-                    # inversion makes the fitted ePSF systematically miss part of each star's flux.
-                    # Changing it alters every fitted ePSF and all downstream photometry, so it is
-                    # tracked for a coordinated fix rather than fixed here (issue #23).
-                    x_interpolation_weight = np.abs(pixel_psf_x - psf_x) or 0.5
-                    y_interpolation_weight = np.abs(pixel_psf_y - psf_y) or 0.5
+                    # Standard bilinear interpolation: each PSF grid point is weighted by
+                    #   (1 - np.abs(pixel_psf_x - psf_x)) * (1 - np.abs(pixel_psf_y - psf_y))
+                    # If the pixel lies on a PSF grid line, floor and ceil coincide and the loop
+                    # visits the same grid point twice with weight 1, double counting it; we use
+                    # 0.5 in that case so the two visits sum to the correct weight.
+                    x_interpolation_weight = (
+                        1 - np.abs(pixel_psf_x - psf_x) if pixel_psf_x != psf_x else 0.5
+                    )
+                    y_interpolation_weight = (
+                        1 - np.abs(pixel_psf_y - psf_y) if pixel_psf_y != psf_y else 0.5
+                    )
                     epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] += (
                         flux_ratio * x_interpolation_weight * y_interpolation_weight
                     )

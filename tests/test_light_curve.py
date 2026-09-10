@@ -3,6 +3,11 @@
 Golden values were generated against 92df5c1 (pre-refactor) with
 `np.array2string(..., floatmode="unique")`. Regenerating them defeats the purpose -- they pin
 the behavior the explicit-steps refactor must preserve bit-for-bit.
+
+Note: the synthetic cutout's stars sit at half-integer positions, which with oversample factor 2
+land exactly on ePSF grid nodes, so these goldens are insensitive to the bilinear interpolation
+weights and did not change with the issue #23 fix. Sub-pixel positions are covered by regression
+tests in test_epsf.py.
 """
 
 from math import ceil, floor
