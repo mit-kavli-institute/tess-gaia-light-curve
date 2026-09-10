@@ -141,6 +141,13 @@ def make_tglc_design_matrix(
                     # line, instead of four on a square. Those points will get double counted
                     # because ceil and floor will give the same result, so we use 0.5 as the weight
                     # to correct that.
+                    # NOTE: these weights are inverted relative to standard bilinear interpolation:
+                    # each node is weighted by the distance to *itself* instead of to the opposite
+                    # node (1 - |distance|), so the nearest node gets the least weight. The
+                    # original TGLC's effective_psf.bilinear() uses the standard weights, and the
+                    # inversion makes the fitted ePSF systematically miss part of each star's flux.
+                    # Changing it alters every fitted ePSF and all downstream photometry, so it is
+                    # tracked for a coordinated fix rather than fixed here (issue #23).
                     x_interpolation_weight = np.abs(pixel_psf_x - psf_x) or 0.5
                     y_interpolation_weight = np.abs(pixel_psf_y - psf_y) or 0.5
                     epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] += (
