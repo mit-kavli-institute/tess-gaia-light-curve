@@ -9,6 +9,7 @@ from math import ceil, floor
 from pathlib import Path
 
 import astropy.units as u
+import h5py
 import numpy as np
 import pytest
 
@@ -419,3 +420,31 @@ def test_generate_light_curves_epsf_flux_fraction_and_raw_flux(monkeypatch):
             get_expected_total_flux(cutout.gaia["tess_mag"][0], cutout.exposure),
         ),
     )
+
+
+def test_write_hdf5_persists_absolute_photometry(monkeypatch, tmp_path):
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    cutout, epsf = _make_cutout_and_epsf()
+    light_curve = next(generate_light_curves(cutout, epsf, Path("/nonexistent")))
+
+    output_file = tmp_path / "light_curve.h5"
+    light_curve.write_hdf5(output_file)
+
+    with h5py.File(output_file, "r") as file:
+        assert file.attrs["ExposureTime"] == light_curve.meta["exposure_time"].to_value(u.second)
+        np.testing.assert_array_equal(
+            file["LightCurve/EPSFFluxFraction"][:], light_curve["epsf_flux_fraction"]
+        )
+        for aperture_name in ("Primary", "Small", "Large"):
+            aperture_group = file[f"LightCurve/AperturePhotometry/{aperture_name}Aperture"]
+            np.testing.assert_array_equal(
+                aperture_group["RawFlux"][:],
+                light_curve[f"{aperture_name.lower()}_aperture_raw_flux"].to_value(u.electron),
+            )
+            # The absolute photometry is recoverable: RawFlux - localbackground gives the
+            # normalized flux whose magnitudes are stored as RawMagnitude (legacy name)
+            np.testing.assert_array_equal(
+                aperture_group["RawFlux"][:]
+                - aperture_group.attrs["localbackground"],
+                light_curve[f"{aperture_name.lower()}_aperture_flux"].to_value(u.electron),
+            )
