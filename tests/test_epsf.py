@@ -152,7 +152,7 @@ def test_fit_epsf_recovers_flux_at_subpixel_positions():
 
     pixel_y, pixel_x = np.mgrid[0 : image_shape[0], 0 : image_shape[1]]
     image = np.full(image_shape, background_level)
-    for x, y, flux in zip(star_x, star_y, star_flux):
+    for x, y, flux in zip(star_x, star_y, star_flux, strict=False):
         image += (
             flux
             / (2 * np.pi * sigma**2)
@@ -185,6 +185,57 @@ def test_fit_epsf_recovers_flux_at_subpixel_positions():
 
     star_flux_in_image = image.sum() - background_level * image.size
     assert 0.9 < psf_model.sum() / star_flux_in_image < 1.1
+
+
+def test_fit_epsf_is_invariant_under_flux_unit_rescaling():
+    """The fit must not depend on the image's flux units (e-/s vs e- per cadence).
+
+    Regression test for issue #25: the regularization rows were weighted as unit constraints
+    while data rows are weighted by 1/flux^power, so the effective regularization strength
+    scaled with the flux unit scale to the `power`. Fitting the same scene expressed in units
+    200x larger must give exactly 200x the fitted parameters.
+    """
+    rng = np.random.default_rng(2718)
+    image_shape = (30, 30)
+    n_stars = 5
+    star_x = rng.uniform(5.0, 24.0, n_stars)
+    star_y = rng.uniform(5.0, 24.0, n_stars)
+    star_flux = rng.uniform(1_000.0, 20_000.0, n_stars)
+    sigma = 0.75
+
+    pixel_y, pixel_x = np.mgrid[0 : image_shape[0], 0 : image_shape[1]]
+    image = np.full(image_shape, 100.0)
+    for x, y, flux in zip(star_x, star_y, star_flux, strict=False):
+        image += (
+            flux
+            / (2 * np.pi * sigma**2)
+            * np.exp(-((pixel_x - x) ** 2 + (pixel_y - y) ** 2) / (2 * sigma**2))
+        )
+
+    design_matrix, regularization_extension_size = make_tglc_design_matrix(
+        image_shape,
+        (11, 11),
+        2,
+        np.column_stack([star_x, star_y]),
+        star_flux / star_flux.max(),
+        np.zeros(image_shape),
+        1e-4,
+    )
+    base_flux_mask = np.zeros(image_shape, dtype=bool)
+
+    unit_scale = 200.0
+    parameters = fit_epsf(design_matrix, image, base_flux_mask, 1.4, regularization_extension_size)
+    scaled_parameters = fit_epsf(
+        design_matrix, image * unit_scale, base_flux_mask, 1.4, regularization_extension_size
+    )
+
+    # atol covers near-zero PSF edge nodes, whose values are pure numerical noise
+    np.testing.assert_allclose(
+        scaled_parameters,
+        unit_scale * parameters,
+        rtol=1e-5,
+        atol=1e-7 * np.max(np.abs(scaled_parameters)),
+    )
 
 
 def test_fit_epsf():

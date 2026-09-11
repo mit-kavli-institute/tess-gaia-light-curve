@@ -284,6 +284,8 @@ def fit_epsf(
         from dimmer stars, 1 means all contributions are equal.
     regularization_dimensions : int
         Number of extra dimensions used for regularization. Must be added to observed vector.
+        The regularization rows are weighted like a pixel of median flux, so the effective
+        regularization strength is independent of the image's flux units (issue #25).
     flux_mask : array[bool], optional
         Complete pixel mask to use for the fit. If `None` (the default), it is computed by
         :func:`get_default_epsf_flux_mask`, which adds pixels dimmer than 0.8 times the median
@@ -300,10 +302,21 @@ def fit_epsf(
     if flux_mask is None:
         flux_mask = get_default_epsf_flux_mask(flux, base_flux_mask)
 
+    # The regularization rows are unit-strength constraints (PSF edge values ~ 0), so they must
+    # carry a statistical weight in the same units as the data rows: otherwise the effective
+    # regularization strength scales with the image's flux units as flux^power (issue #25).
+    # Weighting them like a median-flux pixel makes the fit invariant under a rescaling of the
+    # flux units (e.g. e-/s vs e- per cadence).
+    median_flux = float(np.nanmedian(np.abs(flux)))
+    regularization_scale = 1 / (median_flux**flux_uncertainty_power) if median_flux > 0 else 1.0
+
     # Set up observed vector accounting for regularization
     observed_vector = np.hstack((flux.flatten(), np.zeros(regularization_dimensions)))
     uncertainty_scale = np.hstack(
-        (flux_uncertainty_scale.flatten(), np.ones(regularization_dimensions))
+        (
+            flux_uncertainty_scale.flatten(),
+            np.full(regularization_dimensions, regularization_scale),
+        )
     )
     mask = np.hstack((flux_mask.flatten(), np.zeros(regularization_dimensions, dtype=bool)))
 
