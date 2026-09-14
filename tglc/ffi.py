@@ -261,6 +261,24 @@ class FFICutout:
             f"cadences={len(self.time)} gaia={len(self.gaia)} tic={len(self.tic)}>"
         )
 
+    @property
+    def star_positions(self) -> np.ndarray:
+        """
+        Pixel positions of the cutout's Gaia stars in this sector.
+
+        Reads the sector-specific ``sector_{sector}_x``/``sector_{sector}_y`` columns of the
+        Gaia catalog table.
+
+        Returns
+        -------
+        star_positions : array
+            2D ``(n, 2)`` array where the first column is ``x`` and the second column is ``y``,
+            in the same row order as the ``gaia`` table.
+        """
+        return np.array(
+            [self.gaia[f"sector_{self.sector}_x"], self.gaia[f"sector_{self.sector}_y"]]
+        ).T
+
 
 def _get_science_pixel_limits(scipixs_string: str) -> tuple[int, int, int, int]:
     """
