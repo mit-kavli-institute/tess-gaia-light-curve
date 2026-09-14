@@ -247,14 +247,29 @@ def parse_tglc_args() -> argparse.Namespace:
     lightcurves_parser.add_argument(
         "-t", "--tic", type=int, nargs="+", help="Produce light curves only for listed TIC IDs."
     )
-    lightcurves_parser.add_argument(
+
+    # TEMPORARY command for the retroactive reprocessing campaign (issue #1): remove along with
+    # tglc/scripts/migrate.py when the campaign is complete.
+    migrate_parser = tglc_commands.add_parser(
+        "migrate",
+        description="TEMPORARY: migrate legacy source pickles and ePSF .npy files to FITS. "
+        "For this command, -n/--nprocs is the number of threads used.",
+        help="Migrate legacy .pkl/.npy data products to FITS (temporary)",
+        parents=[command_base_parser],
+    )
+    migrate_parser.add_argument(
         "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
     )
-    lightcurves_parser.add_argument(
+    migrate_parser.add_argument(
         "--oversample",
         type=int,
         default=2,
         help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+    )
+    migrate_parser.add_argument(
+        "--delete-original",
+        action="store_true",
+        help="Delete legacy files after the FITS replacement is verified readable",
     )
 
     args = tglc_parser.parse_args()

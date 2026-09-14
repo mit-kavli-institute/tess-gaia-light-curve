@@ -72,6 +72,19 @@ def get_exposure_time_from_sector(sector: int) -> u.Quantity:
         return 200 * u.second
 
 
+def get_effective_exposure_time_from_sector(sector: int) -> u.Quantity:
+    """
+    Get the effective per-cadence integration time (in seconds) for the given sector.
+
+    This is the value TICA reports as ``EXPTIME``: the FFI cadence length from
+    `get_exposure_time_from_sector` scaled by 0.8 (onboard cosmic-ray mitigation keeps 8 of every
+    10 two-second frames) and 0.99 (each frame integrates for 1.98 of its 2 seconds).
+    """
+    # Computed as * 792 / 1000 so results match TICA EXPTIME header values (e.g. 158.4)
+    # bit-for-bit, which * 0.8 * 0.99 in floating point does not guarantee.
+    return get_exposure_time_from_sector(sector) * 792 / 1000
+
+
 def get_sector_containing_orbit(orbit: int) -> int:
     """Get the TESS sector containing a TESS orbit."""
     if 9 <= orbit <= 200:

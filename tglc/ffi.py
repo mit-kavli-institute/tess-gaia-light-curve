@@ -4,7 +4,6 @@ from importlib import resources
 from itertools import product
 import logging
 from pathlib import Path
-import pickle
 import warnings
 
 from astropy.coordinates import SkyCoord
@@ -20,6 +19,7 @@ from scipy import ndimage
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from tglc.io import write_cutout_fits
 from tglc.utils import data
 from tglc.utils.constants import get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
@@ -62,7 +62,7 @@ def background_mask(im=None):
     return cal_factor
 
 
-class Source:
+class FFICutout:
     def __init__(
         self,
         x=0,
@@ -81,35 +81,56 @@ class Source:
         cadence=None,
         gaia_catalog=None,
         tic_catalog=None,
+        cutout_x=-1,
+        cutout_y=-1,
     ):
         """
-        Source object that includes all data from TESS and Gaia DR2
-        :param x: int, required
-        starting horizontal pixel coordinate
-        :param y: int, required
-        starting vertical pixel coordinate
-        :param flux: np.ndarray, required
-        3d data cube, the time series of a all FFI from a CCD
-        :param time: np.ndarray, required
-        1d array of time
-        :param wcs: astropy.wcs.wcs.WCS, required
-        WCS Keywords of the TESS FFI
-        :param orbit: int, required
-        TESS orbit number
-        :param sector: int, required
-        TESS sector number
-        :param size: int, optional
-        the side length in pixel  of TESScut image
-        :param camera: int, optional
-        camera number
-        :param ccd: int, optional
-        CCD number
-        :param cadence: list, required
-        list of cadences of TESS FFI
-        :param gaia_catalog: QTable, required
-        Gaia catalog data
-        :param tic_catalog: QTable, required
-        TIC catalog data
+        FFI cutout bundling a 3D image stack with the matching TIC and Gaia
+        catalog rows, derived star positions, and timing metadata.
+
+        Parameters
+        ----------
+        x, y : int
+            Starting pixel coordinates of the cutout within the CCD science
+            region. ``ccd_x`` is set to ``x + 44`` to account for the leading
+            buffer columns on the TESS CCD; ``ccd_y`` is set to ``y``.
+        flux : np.ndarray
+            3D ``(t, n_rows, n_cols)`` time series of FFI pixel values for the
+            whole CCD. The constructor slices it down to the cutout region.
+        time : np.ndarray
+            1D array of TJD timestamps, one per cadence.
+        wcs : astropy.wcs.WCS
+            WCS pulled from a good-quality FFI header for the CCD.
+        quality : np.ndarray
+            1D array of TESS quality flags, one per cadence.
+        mask : np.ma.MaskedArray
+            2D ``(n_rows, n_cols)`` mask for the whole CCD. ``.data`` carries
+            background-strap weights and ``.mask`` marks bad pixels.
+        exposure : float
+            Effective exposure time per cadence in seconds, as reported by TICA's
+            ``EXPTIME`` header keyword (cadence length corrected for cosmic-ray
+            mitigation, e.g. 158.4 for 200-second FFIs).
+        orbit : int
+            TESS orbit number.
+        sector : int
+            TESS sector number containing this orbit.
+        size : int
+            Side length of the cutout in pixels.
+        camera, ccd : int
+            TESS camera (1-4) and CCD (1-4) identifiers.
+        cadence : np.ndarray
+            1D array of TESS cadence numbers, one per timestamp.
+        gaia_catalog : astropy.table.QTable
+            Gaia catalog rows covering the CCD. Filtered to rows whose
+            projected position falls inside the cutout window.
+        tic_catalog : astropy.table.QTable
+            TESS Input Catalog rows covering the CCD. Filtered the same way
+            as ``gaia_catalog``.
+        cutout_x, cutout_y : int
+            Cutout grid indices used for matching this cutout to its ePSF on
+            disk. Default ``-1`` indicates "not set" (e.g., for tests that
+            construct an :class:`FFICutout` directly without going through
+            :func:`ffi`).
         """
         if cadence is None:
             cadence = []
@@ -133,6 +154,8 @@ class Source:
         self.wcs = wcs
         self.ccd_x = x + 44
         self.ccd_y = y
+        self.cutout_x = cutout_x
+        self.cutout_y = cutout_y
 
         # Load catalog files and find relevant stars
         gaia_sky_coordinates = SkyCoord(gaia_catalog["ra"], gaia_catalog["dec"])
@@ -229,6 +252,35 @@ class Source:
         catalogdata.sort("tess_mag")
         self.gaia = catalogdata
 
+    def __repr__(self) -> str:
+        # Legacy pickles predate the cutout_x/cutout_y attributes, so fall back to the
+        # -1 "not set" sentinel rather than raising.
+        cutout_x = getattr(self, "cutout_x", -1)
+        cutout_y = getattr(self, "cutout_y", -1)
+        return (
+            f"<{type(self).__name__} orbit-{self.orbit} cam{self.camera}-ccd{self.ccd} "
+            f"cutout ({cutout_x}, {cutout_y}) size={self.size} "
+            f"cadences={len(self.time)} gaia={len(self.gaia)} tic={len(self.tic)}>"
+        )
+
+    @property
+    def star_positions(self) -> np.ndarray:
+        """
+        Pixel positions of the cutout's Gaia stars in this sector.
+
+        Reads the sector-specific ``sector_{sector}_x``/``sector_{sector}_y`` columns of the
+        Gaia catalog table.
+
+        Returns
+        -------
+        star_positions : array
+            2D ``(n, 2)`` array where the first column is ``x`` and the second column is ``y``,
+            in the same row order as the ``gaia`` table.
+        """
+        return np.array(
+            [self.gaia[f"sector_{self.sector}_x"], self.gaia[f"sector_{self.sector}_y"]]
+        ).T
+
 
 def _get_science_pixel_limits(scipixs_string: str) -> tuple[int, int, int, int]:
     """
@@ -300,11 +352,9 @@ def _get_ffi_header_data_and_flux(
         return (0, 0, np.nan, np.full((2048, 2048), np.nan))
 
 
-def _make_source_and_write_pickle(
-    x_y: tuple[int, int], manifest: Manifest, replace: bool, **kwargs
-):
+def _make_cutout_and_write_fits(x_y: tuple[int, int], manifest: Manifest, replace: bool, **kwargs):
     """
-    Construct source object and write pickle file.
+    Construct an :class:`FFICutout` and write it to a FITS file.
 
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
     unpacks coordinates from the first argument.
@@ -314,14 +364,15 @@ def _make_source_and_write_pickle(
     manifest.cutout_y = y
     if not replace and (manifest.source_file.is_file() and manifest.source_file.stat().st_size > 0):
         logger.debug(
-            f"Source file for camera {kwargs['camera']}, CCD {kwargs['ccd']}, {x}_{y} already exists, skipping"
+            f"Cutout file for camera {kwargs['camera']}, CCD {kwargs['ccd']}, {x}_{y} already exists, skipping"
         )
         return
     kwargs["x"] = x * (kwargs["size"] - 4)
     kwargs["y"] = y * (kwargs["size"] - 4)
-    source = Source(**kwargs)
-    with open(manifest.source_file, "wb") as output:
-        pickle.dump(source, output, pickle.HIGHEST_PROTOCOL)
+    kwargs["cutout_x"] = x
+    kwargs["cutout_y"] = y
+    cutout = FFICutout(**kwargs)
+    write_cutout_fits(cutout, manifest.source_file)
 
 
 @jit(float32[:, :](float32[:, :, :]), nogil=True, parallel=True)
@@ -353,10 +404,10 @@ def ffi(
     replace: bool = False,
 ):
     """
-    Produce `Source` object pickle file from calibrated FFI files.
+    Produce :class:`FFICutout` FITS files from calibrated FFI files.
 
-    The `source/` directory is created for the given orbit/camera/CCD. If `produce_mask` is `True`,
-    the a mask file is created instead.
+    The ``source/`` directory is created for the given orbit/camera/CCD. If ``produce_mask`` is
+    ``True``, a mask file is created instead.
 
     Parameters
     ----------
@@ -375,7 +426,7 @@ def ffi(
     cutout_overlap : int
         Overlap between adjecent cutouts cutouts (pixels). Default = 2.
     produce_mask : bool
-        Produce CCD mask instead of making cutout `Source` objects.
+        Produce CCD mask instead of making cutout :class:`FFICutout` FITS files.
     nprocs : int
         Processes to use for in multiprocessing pool. Default = 1.
     replace : bool
@@ -481,15 +532,15 @@ def ffi(
         warnings.simplefilter("ignore", AstropyWarning)
         with fits.open(first_good_quality_ffi) as hdulist:
             wcs = WCS(hdulist[0].header)
-            exposure = int(hdulist[0].header["EXPTIME"])
+            exposure = float(hdulist[0].header["EXPTIME"])
 
     gaia_catalog = QTable.read(manifest.gaia_catalog_file)
     tic_catalog = QTable.read(manifest.tic_catalog_file)
 
-    logger.info(f"Writing cutout source pickle files to {manifest.source_directory.resolve()}")
+    logger.info(f"Writing cutout FITS files to {manifest.source_directory.resolve()}")
     manifest.source_directory.mkdir(exist_ok=True)
-    write_source_pickle_from_x_y = partial(
-        _make_source_and_write_pickle,
+    write_cutout_fits_from_x_y = partial(
+        _make_cutout_and_write_fits,
         manifest=manifest,
         replace=replace,
         flux=flux,
@@ -519,12 +570,21 @@ def ffi(
     # https://github.com/astropy/astropy/issues/16352
     consume_iterator_with_progress_bar(
         pool_map_if_multiprocessing(
-            write_source_pickle_from_x_y,
+            write_cutout_fits_from_x_y,
             cutouts,
             nprocs=1,  # TODO change to `nprocs=procs` when issue above is resolved
             pool_map_method="imap_unordered",
         ),
-        desc=f"Writing source pickle files for {camera}-{ccd}",
-        unit="source",
+        desc=f"Writing cutout FITS files for {camera}-{ccd}",
+        unit="cutout",
         total=len(cutouts),
     )
+
+
+Source = FFICutout
+"""Backwards-compat alias.
+
+Legacy pickle files written before the rename reference ``tglc.ffi.Source`` in
+their class metadata. Keeping this alias allows :func:`tglc.io.migrate_cutout_pickle`
+(and any direct ``pickle.load``) to deserialize those files into the new class.
+"""
