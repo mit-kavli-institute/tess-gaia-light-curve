@@ -12,6 +12,7 @@ before archival on the MIT TSO servers.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 import logging
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ import warnings
 from astropy.io import fits
 from astropy.io.fits.verify import VerifyWarning
 from astropy.table import Column, MaskedColumn, Table
+from astropy.time import Time
 import astropy.units as u
 from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS, FITSFixedWarning
@@ -36,6 +38,29 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    TGLC_VERSION = version("tglc")
+except PackageNotFoundError:
+    # Working-tree usage without an installed distribution (e.g. PYTHONPATH runs).
+    TGLC_VERSION = "unknown"
+
+
+def _add_provenance_keywords(header: fits.Header) -> None:
+    """Record when and by what software a file was created, in place.
+
+    Uses the SPOC keyword conventions (``DATE``, ``ORIGIN``, ``CREATOR``, ``PROCVER``) so
+    TGLC products are self-describing within the TESS ecosystem. ``PROCVER`` reports the
+    installed distribution's version, which can lag the working tree when running from a
+    source checkout (e.g. via ``PYTHONPATH``).
+    """
+    date = Time.now()
+    date.precision = 0
+    header["DATE"] = (date.fits, "UTC date this file was created")
+    header["ORIGIN"] = ("MIT/TSO", "institution responsible for this file")
+    header["CREATOR"] = ("tglc", "software that created this file")
+    header["PROCVER"] = (TGLC_VERSION, "tglc version that created this file")
 
 
 def _atomic_write(hdul: fits.HDUList, path: Path) -> None:
@@ -118,7 +143,8 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
 
     HDU layout:
 
-    * PRIMARY -- empty data; scalar metadata in header
+    * PRIMARY -- empty data; scalar metadata and provenance keywords
+      (``DATE``/``ORIGIN``/``CREATOR``/``PROCVER``) in header
     * FLUX -- (t, size, size) float32 image cube; WCS keys in header
     * MASK -- (size, size) float32 strap weights (``cutout.mask.data``)
     * BADPIX -- (size, size) uint8 bad-pixel mask (``cutout.mask.mask``)
@@ -150,6 +176,7 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     primary_header["EXPOSURE"] = float(cutout.exposure)
     primary_header["CUTOUTX"] = int(getattr(cutout, "cutout_x", -1))
     primary_header["CUTOUTY"] = int(getattr(cutout, "cutout_y", -1))
+    _add_provenance_keywords(primary_header)
 
     primary_hdu = fits.PrimaryHDU(header=primary_header)
 
@@ -297,7 +324,8 @@ def write_epsf_fits(epsf: EPSF, path: Path) -> None:
     The primary HDU stores the ``(t, k)`` float64 array directly, with the
     ePSF configuration and TESS identifiers in the header. The background
     column names are recorded in ``BGCOL*`` header keywords for
-    self-description.
+    self-description, and provenance keywords
+    (``DATE``/``ORIGIN``/``CREATOR``/``PROCVER``) record the file's origin.
 
     Parameters
     ----------
@@ -321,6 +349,7 @@ def write_epsf_fits(epsf: EPSF, path: Path) -> None:
     header["CUTOUTY"] = epsf.cutout_y
     for i, name in enumerate(epsf.background_columns):
         header[f"BGCOL{i}"] = name
+    _add_provenance_keywords(header)
 
     hdu = fits.PrimaryHDU(data=epsf.array, header=header)
     _atomic_write(fits.HDUList([hdu]), path)

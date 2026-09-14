@@ -5,6 +5,7 @@ import pickle
 
 from astropy.io import fits
 from astropy.table import MaskedColumn
+from astropy.time import Time
 import numpy as np
 import pytest
 
@@ -178,6 +179,30 @@ def _make_synthetic_epsf_product(**metadata) -> EPSF:
     }
     kwargs.update(metadata)
     return EPSF(make_synthetic_epsf(), **kwargs)
+
+
+def _assert_provenance_keywords(header: fits.Header):
+    assert header["ORIGIN"] == "MIT/TSO"
+    assert header["CREATOR"] == "tglc"
+    assert isinstance(header["PROCVER"], str) and header["PROCVER"]
+    # DATE must parse as a FITS-format timestamp.
+    Time(header["DATE"], format="fits")
+
+
+def test_cutout_fits_provenance_keywords(tmp_path: Path):
+    cutout = make_synthetic_cutout()
+    fits_path = tmp_path / "source_0_0.fits"
+    write_cutout_fits(cutout, fits_path)
+
+    _assert_provenance_keywords(fits.getheader(fits_path))
+
+
+def test_epsf_fits_provenance_keywords(tmp_path: Path):
+    epsf = _make_synthetic_epsf_product()
+    fits_path = tmp_path / "epsf_0_0.fits"
+    write_epsf_fits(epsf, fits_path)
+
+    _assert_provenance_keywords(fits.getheader(fits_path))
 
 
 def test_write_epsf_fits_roundtrip(tmp_path: Path):
