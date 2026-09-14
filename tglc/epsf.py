@@ -125,24 +125,26 @@ def make_tglc_design_matrix(
                 # The four closest PSF points are bilinearly interpolated to give the PSF model
                 # value of the pixel, and their coordinates are given by rounding the pixel center
                 # coordinates up and down. The contribution from each pixel is the weight it is
-                # given in the bilinear interpolation, which is the product of the distances in the
-                # x and y directions. We further weight the contribution in importance by the flux
-                # ratio of the current star.
+                # given in the bilinear interpolation: (1 - distance_x) * (1 - distance_y).
+                # We further weight the contribution by the flux ratio of the current star.
                 for psf_x, psf_y in [
                     (floor(pixel_psf_x), floor(pixel_psf_y)),
                     (floor(pixel_psf_x), ceil(pixel_psf_y)),
                     (ceil(pixel_psf_x), floor(pixel_psf_y)),
                     (ceil(pixel_psf_x), ceil(pixel_psf_y)),
                 ]:
-                    # Naively, the interpolation weight is:
-                    #   np.abs(pixel_psf_x - psf_x) * np.abs(pixel_psf_y - psf_y)
-                    # If the pixel lies on a PSF pixel boundary, one of these terms will vanish. But
-                    # that actually means we are only interpolating between two pixel centers on a
-                    # line, instead of four on a square. Those points will get double counted
-                    # because ceil and floor will give the same result, so we use 0.5 as the weight
-                    # to correct that.
-                    x_interpolation_weight = np.abs(pixel_psf_x - psf_x) or 0.5
-                    y_interpolation_weight = np.abs(pixel_psf_y - psf_y) or 0.5
+                    # On a grid line, floor and ceil coincide and this loop counts that node twice
+                    # along the aligned axis. Split its unit weight equally between the duplicates.
+                    x_interpolation_weight = (
+                        0.5
+                        if floor(pixel_psf_x) == ceil(pixel_psf_x)
+                        else 1.0 - np.abs(pixel_psf_x - psf_x)
+                    )
+                    y_interpolation_weight = (
+                        0.5
+                        if floor(pixel_psf_y) == ceil(pixel_psf_y)
+                        else 1.0 - np.abs(pixel_psf_y - psf_y)
+                    )
                     epsf_contributions_to_pixels[pixel_y, pixel_x, psf_y, psf_x] += (
                         flux_ratio * x_interpolation_weight * y_interpolation_weight
                     )
