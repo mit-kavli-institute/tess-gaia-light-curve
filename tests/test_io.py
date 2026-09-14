@@ -20,7 +20,12 @@ from tglc.io import (
     write_epsf_fits,
 )
 
-from .synthetic_data import make_synthetic_cutout, make_synthetic_epsf
+from .synthetic_data import (
+    make_constructed_cutout,
+    make_synthetic_cutout,
+    make_synthetic_epsf,
+    make_synthetic_gaia_catalog,
+)
 
 
 # ---------------------------------------------------------------------
@@ -49,6 +54,8 @@ def test_write_cutout_fits_roundtrip(tmp_path: Path):
         "exposure",
         "cutout_x",
         "cutout_y",
+        "pm_epoch",
+        "pm_reference_epoch",
     ):
         assert getattr(loaded, attr) == getattr(cutout, attr), attr
 
@@ -147,6 +154,47 @@ def test_cutout_fits_wcs_roundtrip(tmp_path: Path):
         cutout.wcs.all_pix2world(test_pixels, 0),
         atol=1e-9,
     )
+
+
+def test_cutout_fits_roundtrip_preserves_pm_epoch_and_positions(tmp_path: Path):
+    """Constructor-built cutouts persist their propagated positions and PM epochs."""
+    gaia = make_synthetic_gaia_catalog(
+        ra=[120.5, 120.45],
+        dec=[-45.25, -45.2],
+        pmra=[1000.0, -250.0],
+        pmdec=[-100.0, 500.0],
+        g_mag=[10.0, 11.0],
+    )
+    cutout = make_constructed_cutout(gaia)
+    fits_path = tmp_path / "source_0_0.fits"
+
+    write_cutout_fits(cutout, fits_path)
+
+    header = fits.getheader(fits_path)
+    assert header["PMEPOCH"] == pytest.approx(cutout.pm_epoch)
+    assert header["PMREFEP"] == pytest.approx(cutout.pm_reference_epoch)
+
+    loaded = read_cutout_fits(fits_path)
+    assert loaded.pm_epoch == pytest.approx(cutout.pm_epoch)
+    assert loaded.pm_reference_epoch == pytest.approx(cutout.pm_reference_epoch)
+    np.testing.assert_array_equal(loaded.star_positions, cutout.star_positions)
+
+
+def test_read_cutout_fits_without_pm_epoch_is_none(tmp_path: Path):
+    """Files written before PM propagation lack the keywords; the reader yields None."""
+    cutout = make_synthetic_cutout()
+    del cutout.pm_epoch
+    del cutout.pm_reference_epoch
+    fits_path = tmp_path / "source_0_0.fits"
+    write_cutout_fits(cutout, fits_path)
+
+    header = fits.getheader(fits_path)
+    assert "PMEPOCH" not in header
+    assert "PMREFEP" not in header
+
+    loaded = read_cutout_fits(fits_path)
+    assert loaded.pm_epoch is None
+    assert loaded.pm_reference_epoch is None
 
 
 def test_cutout_fits_empty_gaia(tmp_path: Path):

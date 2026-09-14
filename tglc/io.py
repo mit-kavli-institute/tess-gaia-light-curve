@@ -159,6 +159,9 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
         (``orbit``/``sector``/``camera``/``ccd``/``size``/``ccd_x``/``ccd_y``/
         ``exposure``/``cutout_x``/``cutout_y``/``wcs``/``flux``/``mask``/
         ``time``/``cadence``/``quality``/``gaia``/``tic``) are read from it.
+        When present, ``pm_epoch``/``pm_reference_epoch`` are written as the
+        ``PMEPOCH``/``PMREFEP`` keywords recording the proper-motion
+        propagation epochs of the star positions.
     path : pathlib.Path
         Output FITS file path. The file is written atomically via
         :func:`_atomic_write`.
@@ -176,6 +179,19 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     primary_header["EXPOSURE"] = float(cutout.exposure)
     primary_header["CUTOUTX"] = int(getattr(cutout, "cutout_x", -1))
     primary_header["CUTOUTY"] = int(getattr(cutout, "cutout_y", -1))
+    # Cutouts built before proper-motion propagation (including migrated legacy pickles)
+    # lack the pm epochs; their FITS files are identifiable by the absent keywords.
+    pm_epoch = getattr(cutout, "pm_epoch", None)
+    pm_reference_epoch = getattr(cutout, "pm_reference_epoch", None)
+    if pm_epoch is not None and pm_reference_epoch is not None:
+        primary_header["PMEPOCH"] = (
+            float(pm_epoch),
+            "Julian year star positions propagated to",
+        )
+        primary_header["PMREFEP"] = (
+            float(pm_reference_epoch),
+            "Gaia PM reference epoch (Julian year)",
+        )
     _add_provenance_keywords(primary_header)
 
     primary_hdu = fits.PrimaryHDU(header=primary_header)
@@ -245,7 +261,9 @@ def read_cutout_fits(path: Path) -> FFICutout:
         returned them as plain :class:`Column`. ``EXPOSURE`` values written
         by older versions as int-truncated TICA ``EXPTIME`` (e.g. 158) are
         promoted back to the exact sector-derived effective exposure
-        (e.g. 158.4).
+        (e.g. 158.4). ``pm_epoch``/``pm_reference_epoch`` are ``None`` for
+        files written before star positions were proper-motion propagated;
+        such files carry stale (unpropagated) positions.
 
     Raises
     ------
@@ -287,6 +305,13 @@ def read_cutout_fits(path: Path) -> FFICutout:
     cutout.exposure = _recover_truncated_exposure(float(primary_header["EXPOSURE"]), cutout.sector)
     cutout.cutout_x = int(primary_header.get("CUTOUTX", -1))
     cutout.cutout_y = int(primary_header.get("CUTOUTY", -1))
+    # None identifies files written before proper-motion propagation (stale positions).
+    pm_epoch = primary_header.get("PMEPOCH")
+    cutout.pm_epoch = float(pm_epoch) if pm_epoch is not None else None
+    pm_reference_epoch = primary_header.get("PMREFEP")
+    cutout.pm_reference_epoch = (
+        float(pm_reference_epoch) if pm_reference_epoch is not None else None
+    )
     cutout.wcs = wcs
     cutout.flux = flux
     cutout.mask = np.ma.masked_array(mask_data, mask=badpix_data)
