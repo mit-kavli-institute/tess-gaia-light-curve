@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 LIGHT_CURVE_APERTURES = (("primary", 3), ("small", 1), ("large", 5))
 """(name, side length) of the square apertures extracted for every light curve."""
 
+LIGHT_CURVE_CUTOUT_SIZE = 5
+"""Side length of the decontaminated cutout window light curves are extracted from."""
+
 
 class CutoutWindow(NamedTuple):
     """Edge-clamped pixel window of a cutout within a larger image."""
@@ -459,7 +462,7 @@ def generate_light_curves(
             star_positions[i][0],
             star_positions[i][1],
             source.gaia["tess_flux_ratio"].data[i],
-            cutout_size=5,
+            cutout_size=LIGHT_CURVE_CUTOUT_SIZE,
         )
 
         sky_coord = SkyCoord(source.gaia["ra"][i], source.gaia["dec"][i], unit="deg")
@@ -478,16 +481,20 @@ def generate_light_curves(
             )
             for aperture_name, aperture_size in LIGHT_CURVE_APERTURES
         ]
-        # Shift centroids from the cutout frame into CCD coordinates. This re-derives the cutout
-        # origin, including the nearest-pixel rounding offset relative to the window edge.
+        # Shift centroids from the extraction-window frame into CCD coordinates by adding the
+        # window origin, derived exactly as get_cutout_for_light_curve derives it.
+        window = get_cutout_window(
+            star_positions[i][0],
+            star_positions[i][1],
+            source.flux.shape[1:],
+            cutout_size=LIGHT_CURVE_CUTOUT_SIZE,
+        )
         for (aperture_name, _), table in zip(
             LIGHT_CURVE_APERTURES, aperture_photometry_data, strict=False
         ):
-            table[f"{aperture_name}_aperture_centroid_x"] += (
-                source.ccd_x + nearest_pixel_x[i] - star_x
-            ) * u.pixel
+            table[f"{aperture_name}_aperture_centroid_x"] += (source.ccd_x + window.left) * u.pixel
             table[f"{aperture_name}_aperture_centroid_y"] += (
-                source.ccd_y + nearest_pixel_y[i] - star_y
+                source.ccd_y + window.bottom
             ) * u.pixel
 
         # Background light curve is the background level at the star's location
