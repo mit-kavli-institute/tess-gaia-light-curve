@@ -14,6 +14,7 @@ from tglc.utils.constants import (
     convert_gaia_mags_to_tmag,
     convert_tess_flux_to_tess_magnitude,
     convert_tess_magnitude_to_tess_flux,
+    get_effective_exposure_time_from_sector,
     get_exposure_time_from_sector,
     get_orbits_in_sector,
     get_sector_containing_orbit,
@@ -62,6 +63,20 @@ def test_get_expossure_time_from_sector():
 def test_get_exposure_time_from_sector_with_invalid_sector(bad_sector: int):
     with pytest.raises(ValueError):
         get_exposure_time_from_sector(bad_sector)
+
+
+def test_get_effective_exposure_time_from_sector():
+    # Values must match TICA EXPTIME header values bit-for-bit (see the function's docstring).
+    assert get_effective_exposure_time_from_sector(1).to_value(u.second) == 1425.6
+    assert get_effective_exposure_time_from_sector(27).to_value(u.second) == 475.2
+    assert get_effective_exposure_time_from_sector(56).to_value(u.second) == 158.4
+    assert get_effective_exposure_time_from_sector(106).to_value(u.second) == 158.4
+
+
+@pytest.mark.parametrize("bad_sector", [0, -1])
+def test_get_effective_exposure_time_from_sector_with_invalid_sector(bad_sector: int):
+    with pytest.raises(ValueError):
+        get_effective_exposure_time_from_sector(bad_sector)
 
 
 def test_get_sector_containing_orbit():

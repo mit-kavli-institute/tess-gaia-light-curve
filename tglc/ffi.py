@@ -106,8 +106,10 @@ class FFICutout:
         mask : np.ma.MaskedArray
             2D ``(n_rows, n_cols)`` mask for the whole CCD. ``.data`` carries
             background-strap weights and ``.mask`` marks bad pixels.
-        exposure : int
-            Exposure time in seconds.
+        exposure : float
+            Effective exposure time per cadence in seconds, as reported by TICA's
+            ``EXPTIME`` header keyword (cadence length corrected for cosmic-ray
+            mitigation, e.g. 158.4 for 200-second FFIs).
         orbit : int
             TESS orbit number.
         sector : int
@@ -530,7 +532,7 @@ def ffi(
         warnings.simplefilter("ignore", AstropyWarning)
         with fits.open(first_good_quality_ffi) as hdulist:
             wcs = WCS(hdulist[0].header)
-            exposure = int(hdulist[0].header["EXPTIME"])
+            exposure = float(hdulist[0].header["EXPTIME"])
 
     gaia_catalog = QTable.read(manifest.gaia_catalog_file)
     tic_catalog = QTable.read(manifest.tic_catalog_file)

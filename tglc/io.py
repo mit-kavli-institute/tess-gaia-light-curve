@@ -22,11 +22,13 @@ import warnings
 from astropy.io import fits
 from astropy.io.fits.verify import VerifyWarning
 from astropy.table import Column, MaskedColumn, Table
+import astropy.units as u
 from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS, FITSFixedWarning
 import numpy as np
 
 from tglc.epsf import EPSF
+from tglc.utils.constants import get_effective_exposure_time_from_sector
 
 
 if TYPE_CHECKING:
@@ -93,6 +95,24 @@ def _convert_table_to_native_byteorder(table: Table) -> None:
 # ---------------------------------------------------------------------
 
 
+def _recover_truncated_exposure(exposure: float, sector: int) -> float:
+    """Recover the exact effective exposure time from a legacy int-truncated value.
+
+    Cutout files written by older versions (and the pickles they migrate from) stored
+    ``int(EXPTIME)`` — e.g. 158 for TICA's true 158.4-second effective exposure. The exact
+    value is a deterministic function of the sector, so a stored value equal to the truncation
+    of the sector-derived value is promoted back to the exact one. Any other value (including
+    synthetic test values) is returned unchanged.
+    """
+    try:
+        expected = get_effective_exposure_time_from_sector(sector).to_value(u.second)
+    except ValueError:
+        return exposure
+    if exposure == float(int(expected)):
+        return expected
+    return exposure
+
+
 def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     """Write an FFI cutout to a multi-extension FITS file.
 
@@ -127,7 +147,7 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     primary_header["CUTSIZE"] = int(cutout.size)
     primary_header["CCDX"] = int(cutout.ccd_x)
     primary_header["CCDY"] = int(cutout.ccd_y)
-    primary_header["EXPOSURE"] = int(cutout.exposure)
+    primary_header["EXPOSURE"] = float(cutout.exposure)
     primary_header["CUTOUTX"] = int(getattr(cutout, "cutout_x", -1))
     primary_header["CUTOUTY"] = int(getattr(cutout, "cutout_y", -1))
 
@@ -195,7 +215,10 @@ def read_cutout_fits(path: Path) -> FFICutout:
         columns are converted to native byte order; ``gaia['designation']``
         is decoded to ``str``; ``gaia['pmra']`` and ``gaia['pmdec']`` are
         promoted back to :class:`astropy.table.MaskedColumn` if astropy
-        returned them as plain :class:`Column`.
+        returned them as plain :class:`Column`. ``EXPOSURE`` values written
+        by older versions as int-truncated TICA ``EXPTIME`` (e.g. 158) are
+        promoted back to the exact sector-derived effective exposure
+        (e.g. 158.4).
 
     Raises
     ------
@@ -234,7 +257,7 @@ def read_cutout_fits(path: Path) -> FFICutout:
     cutout.ccd = int(primary_header["CCD"])
     cutout.ccd_x = int(primary_header["CCDX"])
     cutout.ccd_y = int(primary_header["CCDY"])
-    cutout.exposure = int(primary_header["EXPOSURE"])
+    cutout.exposure = _recover_truncated_exposure(float(primary_header["EXPOSURE"]), cutout.sector)
     cutout.cutout_x = int(primary_header.get("CUTOUTX", -1))
     cutout.cutout_y = int(primary_header.get("CUTOUTY", -1))
     cutout.wcs = wcs
@@ -401,6 +424,9 @@ def migrate_cutout_pickle(
         cutout.cutout_x = cutout_x
     if cutout_y is not None:
         cutout.cutout_y = cutout_y
+    # Legacy pickles stored int-truncated TICA EXPTIME values; fix before writing so the
+    # migrated file carries the exact effective exposure.
+    cutout.exposure = _recover_truncated_exposure(float(cutout.exposure), cutout.sector)
 
     write_cutout_fits(cutout, fits_path)
     read_cutout_fits(fits_path)

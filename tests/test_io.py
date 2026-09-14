@@ -3,6 +3,7 @@
 from pathlib import Path
 import pickle
 
+from astropy.io import fits
 from astropy.table import MaskedColumn
 import numpy as np
 import pytest
@@ -58,6 +59,41 @@ def test_write_cutout_fits_roundtrip(tmp_path: Path):
     assert len(loaded.gaia) == len(cutout.gaia)
     assert len(loaded.tic) == len(cutout.tic)
     np.testing.assert_array_equal(loaded.tic["TIC"], cutout.tic["TIC"])
+
+
+def test_cutout_fits_exposure_roundtrips_as_float(tmp_path: Path):
+    """Fractional TICA EXPTIME values (e.g. 158.4) must survive the roundtrip exactly."""
+    cutout = make_synthetic_cutout()
+    cutout.exposure = 158.4
+    fits_path = tmp_path / "source_0_0.fits"
+    write_cutout_fits(cutout, fits_path)
+
+    loaded = read_cutout_fits(fits_path)
+    assert isinstance(loaded.exposure, float)
+    assert loaded.exposure == 158.4
+
+
+def test_read_cutout_fits_promotes_legacy_truncated_exposure(tmp_path: Path):
+    """Files written before the float fix stored int(EXPTIME); reads recover the exact value."""
+    cutout = make_synthetic_cutout()  # sector 89: effective exposure 158.4
+    fits_path = tmp_path / "source_0_0.fits"
+    write_cutout_fits(cutout, fits_path)
+    # Simulate a legacy file, which stored the truncated integer 158.
+    fits.setval(fits_path, "EXPOSURE", value=158)
+
+    loaded = read_cutout_fits(fits_path)
+    assert loaded.exposure == 158.4
+
+
+def test_read_cutout_fits_keeps_exposure_not_matching_truncation(tmp_path: Path):
+    """Values that aren't the sector's truncated effective exposure pass through unchanged."""
+    cutout = make_synthetic_cutout()
+    assert cutout.exposure == 200  # synthetic value, not int(158.4)
+    fits_path = tmp_path / "source_0_0.fits"
+    write_cutout_fits(cutout, fits_path)
+
+    loaded = read_cutout_fits(fits_path)
+    assert loaded.exposure == 200
 
 
 def test_cutout_fits_strap_mask_roundtrip(tmp_path: Path):
@@ -214,6 +250,20 @@ def test_migrate_cutout_pickle_legacy_source_class(tmp_path: Path):
     fits_path = migrate_cutout_pickle(pkl_path, delete_original=True)
     assert not pkl_path.exists()
     assert fits_path.is_file()
+
+
+def test_migrate_cutout_pickle_recovers_truncated_exposure(tmp_path: Path):
+    """Legacy pickles stored int(EXPTIME); the migrated FITS file carries the exact value."""
+    cutout = make_synthetic_cutout()  # sector 89: effective exposure 158.4
+    cutout.exposure = 158
+    pkl_path = tmp_path / "source_0_0.pkl"
+    with pkl_path.open("wb") as fp:
+        pickle.dump(cutout, fp, pickle.HIGHEST_PROTOCOL)
+
+    fits_path = migrate_cutout_pickle(pkl_path)
+
+    assert fits.getval(fits_path, "EXPOSURE") == 158.4
+    assert read_cutout_fits(fits_path).exposure == 158.4
 
 
 def test_migrate_cutout_pickle_sets_cutout_xy(tmp_path: Path):
