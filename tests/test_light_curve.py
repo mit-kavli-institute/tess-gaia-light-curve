@@ -2,7 +2,9 @@
 
 Golden values were generated against 92df5c1 (pre-refactor) with
 `np.array2string(..., floatmode="unique")`. Regenerating them defeats the purpose -- they pin
-the behavior the explicit-steps refactor must preserve bit-for-bit.
+the behavior the explicit-steps refactor must preserve bit-for-bit. One deliberate exception:
+the aperture-centroid golden values were regenerated after the centroid window-origin fix
+(review finding F13), because the legacy values embedded the target's subpixel phase as a bias.
 """
 
 from math import ceil, floor
@@ -11,9 +13,12 @@ from pathlib import Path
 import astropy.units as u
 import numpy as np
 import pytest
+from scipy.ndimage import center_of_mass
 
+from tglc.aperture_photometry import get_aperture_limits
 from tglc.epsf import EPSF
 from tglc.light_curve import (
+    LIGHT_CURVE_APERTURES,
     CutoutWindow,
     evaluate_epsf_model,
     generate_light_curves,
@@ -169,24 +174,26 @@ def test_generate_light_curves_characterization(monkeypatch):
         light_curve["primary_aperture_magnitude"],
         [9.950043598389602, 9.950040327496865, 9.95, 9.949994662659474, 9.949997513219143],
     )
+    # Centroid golden values regenerated after the F13 window-origin fix: the star sits at
+    # (2.5, 3.5), so the legacy shift biased x by -0.5 and y by +0.5.
     np.testing.assert_array_equal(
         light_curve["primary_aperture_centroid_x"].value,
         [
-            45.51360489522273,
-            45.4803138107138,
-            45.48642484931261,
-            45.490718298902465,
-            45.49650680393563,
+            46.01360489522273,
+            45.9803138107138,
+            45.98642484931261,
+            45.990718298902465,
+            45.99650680393563,
         ],
     )
     np.testing.assert_array_equal(
         light_curve["primary_aperture_centroid_y"].value,
         [
-            4.505145996637938,
-            4.478288482170659,
-            4.511170455683255,
-            4.500872892719402,
-            4.495941784997689,
+            4.005145996637938,
+            3.978288482170659,
+            4.011170455683255,
+            4.000872892719402,
+            3.9959417849976893,
         ],
     )
     np.testing.assert_array_equal(
@@ -200,6 +207,52 @@ def test_generate_light_curves_characterization(monkeypatch):
     assert light_curve.meta["primary_aperture_local_background"] == -1129937.174836132 * u.electron
     assert light_curve.meta["small_aperture_local_background"] == -125548.63178431898 * u.electron
     assert light_curve.meta["large_aperture_local_background"] == -3138756.963741101 * u.electron
+
+
+def test_generate_light_curves_centroids_match_independent_moments(monkeypatch):
+    """Centroids must be detector-frame first moments of the aperture pixels (finding F13).
+
+    The legacy CCD shift subtracted the target's subpixel phase from every centroid, biasing
+    them by up to half a pixel per axis.
+    """
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    cutout, epsf = _make_cutout_and_epsf()
+    design_matrix, star_positions = _make_full_design_matrix(cutout, epsf)
+
+    light_curves = list(generate_light_curves(cutout, epsf, Path("/nonexistent")))
+
+    assert len(light_curves) == 3
+    gaia3_by_tic = dict(zip(cutout.tic["TIC"], cutout.tic["gaia3"], strict=True))
+    for light_curve in light_curves:
+        gaia3_id = gaia3_by_tic[light_curve.meta["tic_id"]]
+        i = np.nonzero(cutout.gaia["designation"] == f"Gaia DR3 {gaia3_id}")[0][0]
+        decontaminated, star_x, star_y, _ = get_cutout_for_light_curve(
+            cutout.flux,
+            epsf,
+            design_matrix,
+            star_positions[i][0],
+            star_positions[i][1],
+            cutout.gaia["tess_flux_ratio"].data[i],
+        )
+        window = get_cutout_window(
+            star_positions[i][0], star_positions[i][1], cutout.flux.shape[1:]
+        )
+        for aperture_name, aperture_size in LIGHT_CURVE_APERTURES:
+            bottom, top, left, right = get_aperture_limits(
+                aperture_size, round(star_x), round(star_y), *decontaminated.shape[1:]
+            )
+            expected_x = []
+            expected_y = []
+            for image in decontaminated:
+                moment_y, moment_x = center_of_mass(image[bottom:top, left:right])
+                expected_x.append(moment_x + left + window.left + cutout.ccd_x)
+                expected_y.append(moment_y + bottom + window.bottom + cutout.ccd_y)
+            np.testing.assert_allclose(
+                light_curve[f"{aperture_name}_aperture_centroid_x"].value, expected_x, atol=1e-9
+            )
+            np.testing.assert_allclose(
+                light_curve[f"{aperture_name}_aperture_centroid_y"].value, expected_y, atol=1e-9
+            )
 
 
 def test_generate_light_curves_tic_ids_filter(monkeypatch):
