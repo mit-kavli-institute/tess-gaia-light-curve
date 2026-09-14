@@ -66,10 +66,11 @@ class ApertureLightCurve(TimeSeries):
         "cadence",
         "quality_flag",
         "background_flux",
+        "epsf_flux_fraction",
     ] + [
         f"{aperture_name}_aperture_{data_name}"
         for aperture_name in ["primary", "small", "large"]
-        for data_name in ["magnitude", "centroid_x", "centroid_y"]
+        for data_name in ["magnitude", "raw_flux", "centroid_x", "centroid_y"]
     ]
     _required_metadata = [field.name for field in fields(ApertureLightCurveMetadata)]
 
@@ -93,6 +94,19 @@ class ApertureLightCurve(TimeSeries):
             )
 
     def write_hdf5(self, output_file: Path):
+        """
+        Write the light curve to an HDF5 file.
+
+        In addition to the historical layout (normalized magnitudes are stored per aperture as
+        `RawMagnitude`, a legacy name), the file carries the quantities needed to recover
+        absolute photometry:
+
+        - `ExposureTime` (file attribute): exposure time per cadence in seconds.
+        - `LightCurve/EPSFFluxFraction`: per-cadence fraction of the target's catalog-expected
+          flux captured by the fitted ePSF model.
+        - `RawFlux` (per aperture): un-normalized aperture flux in electrons, related to the
+          normalized products by the aperture group's `localbackground` attribute.
+        """
         with h5py.File(output_file, "w") as file:
             file.attrs["TIC ID"] = self.meta["tic_id"]
             file.attrs["Orbit"] = self.meta["orbit"]
@@ -103,6 +117,7 @@ class ApertureLightCurve(TimeSeries):
             file.attrs["Dec"] = self.meta["sky_coord"].dec.deg
             file.attrs["BJDoffset"] = TESSJD.epoch_val.to(u.day)
             file.attrs["TessMag"] = self.meta["tess_magnitude"]
+            file.attrs["ExposureTime"] = self.meta["exposure_time"].to_value(u.second)
 
             lc_group = file.create_group("LightCurve")
             lc_group.create_dataset("BJD", data=self.time.tjd, dtype=np.float64)
@@ -118,6 +133,9 @@ class ApertureLightCurve(TimeSeries):
                 dtype=np.float64,
             )
             lc_group.create_dataset("QualityFlag", data=self["quality_flag"], dtype=np.int64)
+            lc_group.create_dataset(
+                "EPSFFluxFraction", data=self["epsf_flux_fraction"], dtype=np.float64
+            )
 
             background_group = lc_group.create_group("Background")
             background_group.create_dataset("Value", data=self["background_flux"], dtype=np.float64)
@@ -135,6 +153,12 @@ class ApertureLightCurve(TimeSeries):
                 aperture_group.attrs["localbackground"] = self.meta[
                     f"{aperture_name.lower()}_aperture_local_background"
                 ]
+
+                aperture_group.create_dataset(
+                    "RawFlux",
+                    data=self[f"{aperture_name.lower()}_aperture_raw_flux"].to_value(u.electron),
+                    dtype=np.float64,
+                )
 
                 aperture_data = self[f"{aperture_name.lower()}_aperture_magnitude"]
                 aperture_group.create_dataset("RawMagnitude", data=aperture_data, dtype=np.float64)
