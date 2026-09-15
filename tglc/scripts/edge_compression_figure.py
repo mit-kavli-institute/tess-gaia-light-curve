@@ -338,9 +338,10 @@ def main():
     for ax in (axes[0, 0], axes[0, 1], axes[1, 0]):
         configure_factor_axis(ax, factors, zero_position)
     fig.tight_layout()
-    figure_path = args.outdir / "edge_compression_sweep.pdf"
-    fig.savefig(figure_path)
-    logger.info(f"wrote {figure_path}")
+    for suffix, options in ((".pdf", {}), (".png", {"dpi": 200})):
+        figure_path = (args.outdir / "edge_compression_sweep").with_suffix(suffix)
+        fig.savefig(figure_path, **options)
+        logger.info(f"wrote {figure_path}")
 
     summary = {
         "n_cutouts": len(data),
