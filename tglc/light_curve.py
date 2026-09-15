@@ -288,10 +288,11 @@ def get_cutout_for_light_curve(
 
 def get_high_background_cadence_mask(epsf: EPSF) -> np.ndarray:
     """
-    Flag cadences with an outlying background level in the fitted ePSF.
+    Flag cadences with an outlying flat-background level in the fitted ePSF.
 
-    Cadences deviating from the median by at least 1 MAD-standard-deviation are flagged. The
-    flagged cadences are excluded from the photometric normalization in
+    Cadences whose flat background level deviates from the median by at least 3
+    MAD-standard-deviations are flagged, matching the original TGLC filter. The flagged
+    cadences are excluded from the photometric normalization in
     `tglc.aperture_photometry.get_normalized_aperture_photometry`.
 
     Parameters
@@ -305,14 +306,14 @@ def get_high_background_cadence_mask(epsf: EPSF) -> np.ndarray:
         1D boolean array with one entry per cadence.
     """
     # Use the model's flat background level to determine points that should be ignored during
-    # normalization in photometry
-    # NOTE: "y_strap" preserves the historical column choice (epsf[:, -6]), but the comment above
-    # suggests the "flat" column was intended. Changing it alters photometry normalization, so it
-    # is tracked as a follow-up investigation rather than fixed here (issue #19).
-    flat_background = epsf.background_parameter("y_strap")
-    return np.abs(flat_background - np.nanmedian(flat_background)) >= mad_std(
-        flat_background, ignore_nan=True
-    )
+    # normalization in photometry (issue #19: an earlier port read the y_strap column with a
+    # 1-sigma threshold).
+    flat_background = epsf.background_parameter("flat")
+    deviation = np.abs(flat_background - np.nanmedian(flat_background))
+    threshold = 3 * mad_std(flat_background, ignore_nan=True)
+    # A constant background makes the threshold zero; requiring a strictly positive deviation
+    # keeps the >= comparison from flagging every cadence in that case.
+    return (deviation >= threshold) & (deviation > 0)
 
 
 def get_background_model(
