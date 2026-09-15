@@ -23,7 +23,11 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.io import write_cutout_fits
 from tglc.utils import data
-from tglc.utils.constants import convert_gaia_mags_to_tmag, get_sector_containing_orbit
+from tglc.utils.constants import (
+    DEFAULT_FILTER_MARGIN,
+    convert_gaia_mags_to_tmag,
+    get_sector_containing_orbit,
+)
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
 
@@ -85,7 +89,7 @@ class FFICutout:
         tic_catalog=None,
         cutout_x=-1,
         cutout_y=-1,
-        filter_margin=0.0,
+        filter_margin=DEFAULT_FILTER_MARGIN,
     ):
         """
         FFI cutout bundling a 3D image stack with the matching TIC and Gaia
@@ -142,10 +146,10 @@ class FFICutout:
             :func:`ffi`).
         filter_margin : float
             Extra margin in pixels applied to the Gaia spatial selection
-            window around the cutout. The default ``0.0`` keeps only stars
-            whose propagated positions fall inside the cutout itself; a
-            positive margin admits neighbors just outside the cutout whose
-            PSF wings overlap it.
+            window around the cutout, admitting halo stars just outside the
+            cutout whose PSF wings overlap it. ``0.0`` keeps only stars whose
+            propagated positions fall inside the cutout itself. Defaults to
+            :data:`tglc.utils.constants.DEFAULT_FILTER_MARGIN` (6 px).
         """
         if cadence is None:
             cadence = []
@@ -178,7 +182,9 @@ class FFICutout:
 
         self.derive_catalogs(gaia_catalog, tic_catalog, filter_margin=filter_margin)
 
-    def derive_catalogs(self, gaia_catalog, tic_catalog, *, filter_margin: float = 0.0) -> None:
+    def derive_catalogs(
+        self, gaia_catalog, tic_catalog, *, filter_margin: float = DEFAULT_FILTER_MARGIN
+    ) -> None:
         """
         Derive the ``gaia`` and ``tic`` catalog tables from full-CCD catalogs.
 
@@ -215,8 +221,12 @@ class FFICutout:
             rows only feed the TIC <-> Gaia ID crossmatch).
         filter_margin : float
             Extra margin in pixels applied to the Gaia spatial selection
-            window around the cutout.
+            window around the cutout, admitting halo stars just outside the
+            cutout whose PSF wings overlap it. Recorded in the
+            ``filter_margin`` attribute (and the ``FILTMARG`` FITS keyword).
         """
+        self.filter_margin = float(filter_margin)
+
         # Star positions are propagated from the catalog reference epoch to the median
         # cadence epoch of this cutout, before spatial selection and WCS conversion.
         observation_epoch = Time(np.median(self.time), format="tjd", scale="tdb")
@@ -338,13 +348,12 @@ class FFICutout:
             ),
             np.nan,
         )
-        in_frame = (
-            np.isfinite(tess_mag)
-            & (np.ma.filled(np.ma.masked_invalid(catalogdata["phot_g_mean_mag"]), np.inf) < 25)
-            & (-4 < x_gaia)
-            & (x_gaia < self.size + 3)
-            & (-4 < y_gaia)
-            & (y_gaia < self.size + 3)
+        # The spatial window is enforced entirely by the propagated-position filter above
+        # (`[-filter_margin, size + filter_margin]` in cutout-local pixels); the legacy
+        # hard-coded `-4 < x < size + 3` clauses were dead code at margin 0 and would
+        # silently truncate any wider margin.
+        in_frame = np.isfinite(tess_mag) & (
+            np.ma.filled(np.ma.masked_invalid(catalogdata["phot_g_mean_mag"]), np.inf) < 25
         )
 
         tess_flux = 10 ** (-tess_mag / 2.5)
@@ -512,6 +521,7 @@ def ffi(
     produce_mask: bool = False,
     nprocs: int = 1,
     replace: bool = False,
+    filter_margin: float = DEFAULT_FILTER_MARGIN,
 ):
     """
     Produce :class:`FFICutout` FITS files from calibrated FFI files.
@@ -541,6 +551,10 @@ def ffi(
         Processes to use for in multiprocessing pool. Default = 1.
     replace : bool
         Replace existing files with new data. Default = False.
+    filter_margin : float
+        Extra star-selection margin around each cutout (pixels), admitting halo stars just
+        outside the cutout whose PSF wings overlap it. Default =
+        :data:`tglc.utils.constants.DEFAULT_FILTER_MARGIN` (6 px).
     """
     manifest.orbit = orbit
     manifest.camera = camera
@@ -667,6 +681,7 @@ def ffi(
         cadence=cadence,
         gaia_catalog=gaia_catalog,
         tic_catalog=tic_catalog,
+        filter_margin=filter_margin,
     )
     if cutouts is None:
         edge_cutout_size = cutout_size - cutout_overlap

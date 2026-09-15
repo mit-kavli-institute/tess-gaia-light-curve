@@ -28,6 +28,7 @@ from .synthetic_data import (
     make_synthetic_epsf,
     make_synthetic_gaia_catalog,
     make_synthetic_tic_catalog,
+    make_synthetic_wcs,
     strip_cutout_to_legacy_schema,
 )
 
@@ -60,6 +61,7 @@ def test_write_cutout_fits_roundtrip(tmp_path: Path):
         "cutout_y",
         "pm_epoch",
         "pm_reference_epoch",
+        "filter_margin",
     ):
         assert getattr(loaded, attr) == getattr(cutout, attr), attr
 
@@ -178,6 +180,7 @@ def test_cutout_fits_roundtrip_preserves_pm_epoch_and_positions(tmp_path: Path):
     header = fits.getheader(fits_path)
     assert header["PMEPOCH"] == pytest.approx(cutout.pm_epoch)
     assert header["PMREFEP"] == pytest.approx(cutout.pm_reference_epoch)
+    assert header["FILTMARG"] == cutout.filter_margin
 
     loaded = read_cutout_fits(fits_path)
     assert loaded.pm_epoch == pytest.approx(cutout.pm_epoch)
@@ -202,16 +205,19 @@ def test_read_cutout_fits_without_pm_epoch_is_none(tmp_path: Path):
     cutout = make_synthetic_cutout()
     del cutout.pm_epoch
     del cutout.pm_reference_epoch
+    del cutout.filter_margin
     fits_path = tmp_path / "source_0_0.fits"
     write_cutout_fits(cutout, fits_path)
 
     header = fits.getheader(fits_path)
     assert "PMEPOCH" not in header
     assert "PMREFEP" not in header
+    assert "FILTMARG" not in header
 
     loaded = read_cutout_fits(fits_path)
     assert loaded.pm_epoch is None
     assert loaded.pm_reference_epoch is None
+    assert loaded.filter_margin is None
 
 
 def test_cutout_fits_empty_gaia(tmp_path: Path):
@@ -404,7 +410,10 @@ def test_migrate_cutout_pickle_rederives_catalogs(tmp_path: Path):
     with pkl_path.open("wb") as fp:
         pickle.dump(legacy, fp, pickle.HIGHEST_PROTOCOL)
 
-    fits_path = migrate_cutout_pickle(pkl_path, gaia_catalog=gaia_catalog, tic_catalog=tic_catalog)
+    # filter_margin=0.0 matches the oracle, which make_constructed_cutout pins at 0.
+    fits_path = migrate_cutout_pickle(
+        pkl_path, gaia_catalog=gaia_catalog, tic_catalog=tic_catalog, filter_margin=0.0
+    )
 
     header = fits.getheader(fits_path)
     assert header["PMEPOCH"] == pytest.approx(2026.0)
@@ -427,6 +436,37 @@ def test_migrate_cutout_pickle_rederives_catalogs(tmp_path: Path):
     np.testing.assert_array_equal(loaded.gaia["pmdec"].mask, oracle.gaia["pmdec"].mask)
     np.testing.assert_array_equal(loaded.tic["TIC"], oracle.tic["TIC"])
     np.testing.assert_array_equal(loaded.tic["gaia3"], oracle.tic["gaia3"])
+
+
+def test_migrate_cutout_pickle_honors_filter_margin(tmp_path: Path):
+    """The migrated selection window matches the requested filter margin."""
+    wcs = make_synthetic_wcs()
+    halo = wcs.pixel_to_world(39.0, 74.0)  # 5 px outside the window's low-x edge
+    inside = wcs.pixel_to_world(100.0, 75.0)
+    gaia_catalog = make_synthetic_gaia_catalog(
+        ra=[halo.ra.deg, inside.ra.deg],
+        dec=[halo.dec.deg, inside.dec.deg],
+        pmra=[0.0, 0.0],
+        pmdec=[0.0, 0.0],
+        g_mag=[10.0, 11.0],
+    )
+    tic_catalog = make_synthetic_tic_catalog()
+    legacy = strip_cutout_to_legacy_schema(make_constructed_cutout(gaia_catalog, tic_catalog))
+    assert len(legacy.gaia) == 1  # margin 0: the halo star is outside the window
+    pkl_path = tmp_path / "source_0_0.pkl"
+    with pkl_path.open("wb") as fp:
+        pickle.dump(legacy, fp, pickle.HIGHEST_PROTOCOL)
+
+    fits_path = migrate_cutout_pickle(
+        pkl_path, gaia_catalog=gaia_catalog, tic_catalog=tic_catalog, filter_margin=6.0
+    )
+
+    loaded = read_cutout_fits(fits_path)
+    assert fits.getheader(fits_path)["FILTMARG"] == 6.0
+    assert loaded.filter_margin == 6.0
+    assert len(loaded.gaia) == 2  # the halo star is admitted by the 6 px margin
+    oracle = make_constructed_cutout(gaia_catalog, tic_catalog, filter_margin=6.0)
+    np.testing.assert_allclose(loaded.star_positions, oracle.star_positions)
 
 
 def test_migrate_epsf_npy(tmp_path: Path):

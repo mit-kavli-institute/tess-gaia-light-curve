@@ -10,6 +10,7 @@ import numpy as np
 
 from tglc.io import read_cutout_fits, write_cutout_fits
 from tglc.scripts.migrate import _load_catalogs, migrate_main
+from tglc.utils.constants import DEFAULT_FILTER_MARGIN
 from tglc.utils.manifest import Manifest
 
 from .synthetic_data import (
@@ -55,6 +56,7 @@ def _migrate_args(tmp_path: Path, **overrides) -> argparse.Namespace:
         "delete_original": False,
         "psf_size": 11,
         "oversample": 2,
+        "filter_margin": DEFAULT_FILTER_MARGIN,
     }
     settings.update(overrides)
     return argparse.Namespace(**settings)
@@ -119,3 +121,19 @@ def test_migrate_main_skips_current_fits_without_replace(tmp_path: Path):
 
     assert source_fits.stat().st_mtime_ns == first_migration
     assert npy_path.with_suffix(".fits").is_file()
+
+
+def test_migrate_main_redoes_fits_with_different_filter_margin(tmp_path: Path):
+    """Changing --filter-margin re-migrates existing FITS files without --replace."""
+    pkl_path, npy_path = _make_migration_tree(tmp_path)
+    migrate_main(_migrate_args(tmp_path, filter_margin=0.0))
+    source_fits = pkl_path.with_suffix(".fits")
+    assert fits.getheader(source_fits)["FILTMARG"] == 0.0
+
+    migrate_main(_migrate_args(tmp_path, filter_margin=6.0))
+    assert fits.getheader(source_fits)["FILTMARG"] == 6.0
+
+    # Re-running with the matching margin skips the now-current file.
+    unchanged = source_fits.stat().st_mtime_ns
+    migrate_main(_migrate_args(tmp_path, filter_margin=6.0))
+    assert source_fits.stat().st_mtime_ns == unchanged

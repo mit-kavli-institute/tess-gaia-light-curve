@@ -30,7 +30,7 @@ from astropy.wcs import WCS, FITSFixedWarning
 import numpy as np
 
 from tglc.epsf import EPSF
-from tglc.utils.constants import get_effective_exposure_time_from_sector
+from tglc.utils.constants import DEFAULT_FILTER_MARGIN, get_effective_exposure_time_from_sector
 
 
 if TYPE_CHECKING:
@@ -194,6 +194,13 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
             float(pm_reference_epoch),
             "Gaia PM reference epoch (Julian year)",
         )
+    # Files written before the configurable star-selection margin lack the keyword.
+    filter_margin = getattr(cutout, "filter_margin", None)
+    if filter_margin is not None:
+        primary_header["FILTMARG"] = (
+            float(filter_margin),
+            "Star selection margin around cutout (pixels)",
+        )
     _add_provenance_keywords(primary_header)
 
     primary_hdu = fits.PrimaryHDU(header=primary_header)
@@ -314,6 +321,9 @@ def read_cutout_fits(path: Path) -> FFICutout:
     cutout.pm_reference_epoch = (
         float(pm_reference_epoch) if pm_reference_epoch is not None else None
     )
+    # None identifies files written before the configurable star-selection margin.
+    filter_margin = primary_header.get("FILTMARG")
+    cutout.filter_margin = float(filter_margin) if filter_margin is not None else None
     cutout.wcs = wcs
     cutout.flux = flux
     cutout.mask = np.ma.masked_array(mask_data, mask=badpix_data)
@@ -440,6 +450,7 @@ def migrate_cutout_pickle(
     tic_catalog: Table,
     cutout_x: int | None = None,
     cutout_y: int | None = None,
+    filter_margin: float = DEFAULT_FILTER_MARGIN,
     delete_original: bool = False,
 ) -> Path:
     """Convert a legacy cutout pickle into a FITS file.
@@ -473,6 +484,10 @@ def migrate_cutout_pickle(
         Pickles written before these attributes existed carry no record of
         them, so the FITS header would otherwise get ``CUTOUTX``/``CUTOUTY``
         of -1. Callers can recover the indices from the legacy file name.
+    filter_margin : float, optional
+        Extra star-selection margin in pixels passed to
+        :meth:`tglc.ffi.FFICutout.derive_catalogs`; recorded in the migrated
+        file's ``FILTMARG`` keyword.
     delete_original : bool, optional
         If ``True``, remove ``pkl_path`` after the new FITS file has been
         verified readable. Defaults to ``False`` so the legacy file is
@@ -498,7 +513,7 @@ def migrate_cutout_pickle(
     cutout.exposure = _recover_truncated_exposure(float(cutout.exposure), cutout.sector)
     # Re-deriving a pickle that already carries current-schema tables is idempotent, so
     # this runs unconditionally.
-    cutout.derive_catalogs(gaia_catalog, tic_catalog)
+    cutout.derive_catalogs(gaia_catalog, tic_catalog, filter_margin=filter_margin)
 
     write_cutout_fits(cutout, fits_path)
     read_cutout_fits(fits_path)

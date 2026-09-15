@@ -347,6 +347,8 @@ def test_full_pipeline_after_migration(
     migrated = read_cutout_fits(source_fits)
     assert migrated.pm_epoch == pytest.approx(cutout.pm_epoch)
     assert migrated.pm_reference_epoch == pytest.approx(cutout.pm_reference_epoch)
+    # The cutouts and migrate CLIs share the same --filter-margin default.
+    assert migrated.filter_margin == cutout.filter_margin
     assert migrated.gaia.colnames == cutout.gaia.colnames
     for column in ("ra", "dec", "ra_ref", "dec_ref"):
         np.testing.assert_allclose(

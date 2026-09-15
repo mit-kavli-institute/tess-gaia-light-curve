@@ -28,6 +28,13 @@ TESS pixel saturation level, from the TESS Instrument Handbook, p37.
 See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
 """
 
+DEFAULT_FILTER_MARGIN = 6.0
+"""
+Default extra margin in pixels applied to the star selection window around a cutout,
+admitting halo stars just outside the cutout whose PSF wings overlap it. ~0.5 px beyond
+the 5.5 px half-width of the 11 px ePSF stamp, as headroom for proper motion errors.
+"""
+
 
 def convert_tess_flux_to_tess_magnitude(flux: u.Quantity) -> npt.ArrayLike:
     """

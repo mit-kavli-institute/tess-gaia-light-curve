@@ -128,6 +128,7 @@ def make_synthetic_cutout(
     cutout.cutout_y = 0
     cutout.pm_epoch = 2026.0
     cutout.pm_reference_epoch = 2016.0
+    cutout.filter_margin = 6.0
 
     cutout.wcs = make_synthetic_wcs()
     cutout.flux = rng.normal(100.0, 5.0, size=(n_cadences, size, size)).astype(np.float32)
@@ -208,12 +209,13 @@ def strip_cutout_to_legacy_schema(cutout: FFICutout) -> FFICutout:
     """Downgrade a cutout to the legacy pickle schema, in place (and return it).
 
     Legacy pickles predate proper-motion propagation: no ``pm_epoch``/
-    ``pm_reference_epoch`` attributes, and a gaia table whose ``ra``/``dec`` and
-    pixel columns hold un-propagated reference-epoch values with no ``*_ref``
-    columns.
+    ``pm_reference_epoch``/``filter_margin`` attributes, and a gaia table whose
+    ``ra``/``dec`` and pixel columns hold un-propagated reference-epoch values
+    with no ``*_ref`` columns.
     """
     del cutout.pm_epoch
     del cutout.pm_reference_epoch
+    del cutout.filter_margin
     gaia = cutout.gaia
     for name, ref_name in [
         ("ra", "ra_ref"),

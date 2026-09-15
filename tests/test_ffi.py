@@ -1,5 +1,6 @@
 """Tests for the :class:`tglc.ffi.FFICutout` wrapper class."""
 
+import inspect
 import warnings
 
 from astropy.coordinates import SkyCoord
@@ -9,6 +10,9 @@ import astropy.units as u
 from erfa.core import ErfaWarning
 import numpy as np
 import pytest
+
+from tglc.ffi import FFICutout, ffi
+from tglc.utils.constants import DEFAULT_FILTER_MARGIN
 
 from .synthetic_data import (
     make_constructed_cutout,
@@ -258,6 +262,40 @@ def test_init_spatial_filter_uses_propagated_positions():
         _oracle_local_position(wcs, ra_out, dec_out, pm_toward_positive_x, 0.0),
         atol=1e-6,
     )
+
+
+def test_init_filter_margin_admits_halo_stars():
+    """A positive filter margin admits stars just outside the cutout window."""
+    wcs = make_synthetic_wcs()
+    # make_constructed_cutout: size=150, window [44, 194] x [0, 150] in CCD pixels.
+    halo_low = wcs.pixel_to_world(39.0, 74.0)  # cutout-local (-5, 74)
+    halo_high = wcs.pixel_to_world(120.0, 155.0)  # cutout-local (76, 155)
+    inside = wcs.pixel_to_world(100.0, 75.0)  # cutout-local (56, 75)
+    gaia = make_synthetic_gaia_catalog(
+        ra=[halo_low.ra.deg, halo_high.ra.deg, inside.ra.deg],
+        dec=[halo_low.dec.deg, halo_high.dec.deg, inside.dec.deg],
+        pmra=[0.0, 0.0, 0.0],
+        pmdec=[0.0, 0.0, 0.0],
+        g_mag=[10.0, 11.0, 12.0],
+    )
+
+    narrow = make_constructed_cutout(gaia)  # helper pins filter_margin=0.0
+    assert list(narrow.gaia["designation"]) == ["Gaia DR3 9002"]
+    assert narrow.filter_margin == 0.0
+
+    wide = make_constructed_cutout(gaia, filter_margin=6.0)
+    assert list(wide.gaia["designation"]) == ["Gaia DR3 9000", "Gaia DR3 9001", "Gaia DR3 9002"]
+    assert wide.filter_margin == 6.0
+    assert wide.gaia[f"sector_{wide.sector}_x"][0] == pytest.approx(-5.0, abs=1e-3)
+    assert wide.gaia[f"sector_{wide.sector}_y"][1] == pytest.approx(155.0, abs=1e-3)
+
+
+def test_filter_margin_defaults_to_six():
+    assert DEFAULT_FILTER_MARGIN == 6.0
+    for function in (FFICutout.__init__, FFICutout.derive_catalogs, ffi):
+        assert (
+            inspect.signature(function).parameters["filter_margin"].default == DEFAULT_FILTER_MARGIN
+        ), function.__qualname__
 
 
 def test_init_empty_gaia_selection():

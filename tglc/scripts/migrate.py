@@ -8,10 +8,11 @@ catalogs (proper-motion propagation, the ``*_ref`` columns, and the
 ``PMEPOCH``/``PMREFEP`` epochs), so those catalog files must be on disk;
 regenerate them with ``tglc catalogs`` if needed (database queries only, no
 FFI reads). Cutout FITS files produced by earlier versions of this script
-carry stale catalogs — they are detected by their missing ``PMEPOCH`` keyword
-and re-migrated automatically, without requiring ``--replace``. Delete this
-script (and its CLI wiring) once the retroactive reprocessing campaign is
-done.
+carry stale catalogs — they are detected by their missing ``PMEPOCH`` keyword,
+or a ``FILTMARG`` keyword absent or different from the requested
+``--filter-margin``, and re-migrated automatically without requiring
+``--replace``. Delete this script (and its CLI wiring) once the retroactive
+reprocessing campaign is done.
 """
 
 import argparse
@@ -49,20 +50,22 @@ class _WorkItem:
     cutout_y: int
 
 
-def _existing_fits_is_current(fits_path: Path, kind: str) -> bool:
+def _existing_fits_is_current(fits_path: Path, kind: str, filter_margin: float) -> bool:
     """Whether an existing FITS sibling is current, i.e. skippable without --replace.
 
-    Cutout FITS files written by the old naive migration carry stale catalog tables
-    and are identifiable by their missing ``PMEPOCH`` keyword; they count as not
-    current so re-running the migration repairs them. ePSF files have no staleness
-    marker, so existence is enough. An unreadable FITS file counts as not current.
+    A cutout FITS file is current only if it carries propagated catalogs (``PMEPOCH``
+    present — files from the old naive migration lack it) built with the requested
+    star-selection margin (``FILTMARG`` present and equal; the float round-trips
+    through the header exactly). ePSF files have no such markers, so existence is
+    enough. An unreadable FITS file counts as not current.
     """
     if kind != "source":
         return True
     try:
-        return fits.getheader(fits_path).get("PMEPOCH") is not None
+        header = fits.getheader(fits_path)
     except Exception:
         return False
+    return header.get("PMEPOCH") is not None and header.get("FILTMARG") == float(filter_margin)
 
 
 def _discover_work(args: argparse.Namespace) -> dict[tuple[int, int], list[_WorkItem]]:
@@ -91,7 +94,7 @@ def _discover_work(args: argparse.Namespace) -> dict[tuple[int, int], list[_Work
                     continue
                 fits_sibling = legacy_path.with_suffix(".fits")
                 if not args.replace and fits_sibling.is_file():
-                    if _existing_fits_is_current(fits_sibling, kind):
+                    if _existing_fits_is_current(fits_sibling, kind, args.filter_margin):
                         skipped_existing += 1
                         continue
                     stale_refreshed += 1
@@ -106,7 +109,7 @@ def _discover_work(args: argparse.Namespace) -> dict[tuple[int, int], list[_Work
     if stale_refreshed:
         logger.info(
             f"Re-migrating {stale_refreshed} cutouts whose FITS files predate proper-motion "
-            "propagation (missing PMEPOCH keyword)"
+            "propagation or were built with a different filter margin"
         )
     return work
 
@@ -142,6 +145,7 @@ def migrate_main(args: argparse.Namespace):
                     tic_catalog=tic_catalog,
                     cutout_x=item.cutout_x,
                     cutout_y=item.cutout_y,
+                    filter_margin=args.filter_margin,
                     delete_original=args.delete_original,
                 )
             else:
