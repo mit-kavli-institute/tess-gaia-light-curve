@@ -178,6 +178,59 @@ def make_synthetic_cutout(
     return cutout
 
 
+def make_synthetic_ccd_catalogs(
+    *, ccd_x: int = 44, ccd_y: int = 0, size: int = 12, n_stars: int = 3
+) -> tuple[QTable, QTable]:
+    """ECSV-shaped Gaia/TIC catalogs whose stars land inside a cutout window.
+
+    ``make_synthetic_wcs``'s reference coordinate maps to pixel (74, 74), outside
+    ``make_synthetic_cutout``'s window (ccd_x=44, ccd_y=0, size=12), so the catalog
+    builders' default coordinates can't be used directly with that cutout; this
+    places stars on a diagonal inside the given window instead.
+    """
+    wcs = make_synthetic_wcs()
+    pixel_x = np.linspace(ccd_x + 2, ccd_x + size - 2, n_stars)
+    pixel_y = np.linspace(ccd_y + 2, ccd_y + size - 2, n_stars)
+    coordinates = wcs.pixel_to_world(pixel_x, pixel_y)
+    pm = np.linspace(-10.0, 10.0, n_stars)
+    gaia = make_synthetic_gaia_catalog(
+        ra=coordinates.ra.deg,
+        dec=coordinates.dec.deg,
+        pmra=pm,
+        pmdec=-pm,
+        g_mag=np.linspace(10.0, 12.0, n_stars),
+    )
+    tic = make_synthetic_tic_catalog(ra=coordinates.ra.deg, dec=coordinates.dec.deg)
+    return gaia, tic
+
+
+def strip_cutout_to_legacy_schema(cutout: FFICutout) -> FFICutout:
+    """Downgrade a cutout to the legacy pickle schema, in place (and return it).
+
+    Legacy pickles predate proper-motion propagation: no ``pm_epoch``/
+    ``pm_reference_epoch`` attributes, and a gaia table whose ``ra``/``dec`` and
+    pixel columns hold un-propagated reference-epoch values with no ``*_ref``
+    columns.
+    """
+    del cutout.pm_epoch
+    del cutout.pm_reference_epoch
+    gaia = cutout.gaia
+    for name, ref_name in [
+        ("ra", "ra_ref"),
+        ("dec", "dec_ref"),
+        (f"sector_{cutout.sector}_x", f"sector_{cutout.sector}_x_ref"),
+        (f"sector_{cutout.sector}_y", f"sector_{cutout.sector}_y_ref"),
+    ]:
+        gaia[name] = gaia[ref_name]
+        gaia.remove_column(ref_name)
+    return cutout
+
+
+def make_legacy_synthetic_cutout(**kwargs) -> FFICutout:
+    """A ``make_synthetic_cutout`` downgraded to the legacy pickle schema."""
+    return strip_cutout_to_legacy_schema(make_synthetic_cutout(**kwargs))
+
+
 def make_synthetic_epsf(n_cadences: int = 3, psf_size: int = 11, oversample: int = 2):
     k = (psf_size * oversample + 1) ** 2 + len(EPSF_BACKGROUND_COLUMNS)
     return np.linspace(0.0, 1.0, n_cadences * k).reshape(n_cadences, k).astype(np.float64)

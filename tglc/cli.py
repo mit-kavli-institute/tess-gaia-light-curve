@@ -253,6 +253,10 @@ def parse_tglc_args() -> argparse.Namespace:
     migrate_parser = tglc_commands.add_parser(
         "migrate",
         description="TEMPORARY: migrate legacy source pickles and ePSF .npy files to FITS. "
+        "Cutout migration re-derives the Gaia/TIC catalog tables from the per-CCD ECSV "
+        "catalogs, which must be on disk (regenerate with 'tglc catalogs' if needed; no FFI "
+        "reads involved). Existing cutout FITS files missing the PMEPOCH keyword (produced "
+        "by the old naive migration) are re-migrated automatically without --replace. "
         "For this command, -n/--nprocs is the number of threads used.",
         help="Migrate legacy .pkl/.npy data products to FITS (temporary)",
         parents=[command_base_parser],

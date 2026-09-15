@@ -91,17 +91,9 @@ class FFICutout:
         FFI cutout bundling a 3D image stack with the matching TIC and Gaia
         catalog rows, derived star positions, and timing metadata.
 
-        Gaia star positions are propagated from the catalog reference epoch
-        (J2016.0 for Gaia DR3, or the catalog's ``ref_epoch`` column when
-        present) to the median cadence epoch of the cutout using the catalog
-        proper motions, before spatial selection and WCS conversion. The
-        epochs used are recorded in the ``pm_epoch`` and
-        ``pm_reference_epoch`` attributes (Julian years). The ``gaia`` table
-        records positions at both epochs: ``ra``/``dec`` and
-        ``sector_{sector}_x``/``sector_{sector}_y`` hold the propagated
-        (``pm_epoch``) values, while ``ra_ref``/``dec_ref`` and
-        ``sector_{sector}_x_ref``/``sector_{sector}_y_ref`` hold the
-        un-propagated catalog positions at ``pm_reference_epoch``.
+        The ``gaia``/``tic`` tables and the ``pm_epoch``/``pm_reference_epoch``
+        attributes are built by :meth:`derive_catalogs`; see that method for
+        the proper-motion propagation and column conventions.
 
         Parameters
         ----------
@@ -184,6 +176,47 @@ class FFICutout:
         self.mask = mask[y : y + size, x : x + size]
         self.time = np.array(time)
 
+        self.derive_catalogs(gaia_catalog, tic_catalog, filter_margin=filter_margin)
+
+    def derive_catalogs(self, gaia_catalog, tic_catalog, *, filter_margin: float = 0.0) -> None:
+        """
+        Derive the ``gaia`` and ``tic`` catalog tables from full-CCD catalogs.
+
+        Gaia star positions are propagated from the catalog reference epoch
+        (J2016.0 for Gaia DR3, or the catalog's ``ref_epoch`` column when
+        present) to the median cadence epoch of the cutout using the catalog
+        proper motions, before spatial selection and WCS conversion. The
+        epochs used are recorded in the ``pm_epoch`` and
+        ``pm_reference_epoch`` attributes (Julian years). The ``gaia`` table
+        records positions at both epochs: ``ra``/``dec`` and
+        ``sector_{sector}_x``/``sector_{sector}_y`` hold the propagated
+        (``pm_epoch``) values, while ``ra_ref``/``dec_ref`` and
+        ``sector_{sector}_x_ref``/``sector_{sector}_y_ref`` hold the
+        un-propagated catalog positions at ``pm_reference_epoch``.
+
+        Reads only ``wcs``, ``time`` (median), ``ccd_x``/``ccd_y``, ``size``,
+        and ``sector`` from the cutout — never ``flux``/``mask`` — so it is
+        safe to call on an unpickled legacy cutout whose image arrays are
+        already sliced (e.g. during ``tglc migrate``). The input catalogs are
+        not modified.
+
+        Parameters
+        ----------
+        gaia_catalog : astropy.table.QTable
+            Gaia catalog rows covering the CCD, with the ECSV catalog schema
+            (``designation``, ``ra``, ``dec``, ``pmra``, ``pmdec``,
+            ``phot_g/bp/rp_mean_mag``). Filtered to rows whose
+            proper-motion-propagated position falls inside the cutout window
+            (padded by ``filter_margin``).
+        tic_catalog : astropy.table.QTable
+            TESS Input Catalog rows covering the CCD (``id``, ``gaia3``,
+            ``ra``, ``dec``, ...). Filtered to rows whose catalog position
+            falls inside the cutout window (no proper-motion propagation; TIC
+            rows only feed the TIC <-> Gaia ID crossmatch).
+        filter_margin : float
+            Extra margin in pixels applied to the Gaia spatial selection
+            window around the cutout.
+        """
         # Star positions are propagated from the catalog reference epoch to the median
         # cadence epoch of this cutout, before spatial selection and WCS conversion.
         observation_epoch = Time(np.median(self.time), format="tjd", scale="tdb")
@@ -225,8 +258,8 @@ class FFICutout:
                 propagated_coordinates = gaia_sky_coordinates.apply_space_motion(
                     new_obstime=observation_epoch
                 )
-                gaia_x, gaia_y = wcs.world_to_pixel(propagated_coordinates)
-                gaia_x_ref, gaia_y_ref = wcs.world_to_pixel(gaia_sky_coordinates)
+                gaia_x, gaia_y = self.wcs.world_to_pixel(propagated_coordinates)
+                gaia_x_ref, gaia_y_ref = self.wcs.world_to_pixel(gaia_sky_coordinates)
             propagated_ra = np.asarray(propagated_coordinates.ra.deg, dtype=np.float64)
             propagated_dec = np.asarray(propagated_coordinates.dec.deg, dtype=np.float64)
         else:
@@ -237,10 +270,10 @@ class FFICutout:
             propagated_ra = np.zeros(0)
             propagated_dec = np.zeros(0)
         gaia_x_in_source = (self.ccd_x - filter_margin <= gaia_x) & (
-            gaia_x <= self.ccd_x + size + filter_margin
+            gaia_x <= self.ccd_x + self.size + filter_margin
         )
         gaia_y_in_source = (self.ccd_y - filter_margin <= gaia_y) & (
-            gaia_y <= self.ccd_y + size + filter_margin
+            gaia_y <= self.ccd_y + self.size + filter_margin
         )
         gaia_in_source = gaia_x_in_source & gaia_y_in_source
         catalogdata = gaia_catalog[gaia_in_source]
@@ -254,9 +287,9 @@ class FFICutout:
         tic_sky_coordinates = SkyCoord(tic_catalog["ra"], tic_catalog["dec"])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", ErfaWarning)
-            tic_x, tic_y = wcs.world_to_pixel(tic_sky_coordinates)
-        tic_x_in_source = (self.ccd_x <= tic_x) & (tic_x <= self.ccd_x + size)
-        tic_y_in_source = (self.ccd_y <= tic_y) & (tic_y <= self.ccd_y + size)
+            tic_x, tic_y = self.wcs.world_to_pixel(tic_sky_coordinates)
+        tic_x_in_source = (self.ccd_x <= tic_x) & (tic_x <= self.ccd_x + self.size)
+        tic_y_in_source = (self.ccd_y <= tic_y) & (tic_y <= self.ccd_y + self.size)
         tic_in_source = tic_x_in_source & tic_y_in_source
         catalogdata_tic = tic_catalog[tic_in_source]
 

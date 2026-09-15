@@ -436,15 +436,24 @@ def migrate_cutout_pickle(
     pkl_path: Path,
     fits_path: Path | None = None,
     *,
+    gaia_catalog: Table,
+    tic_catalog: Table,
     cutout_x: int | None = None,
     cutout_y: int | None = None,
     delete_original: bool = False,
 ) -> Path:
     """Convert a legacy cutout pickle into a FITS file.
 
-    Reads the pickled cutout, writes the FITS file (atomically), verifies it
-    is readable, and optionally removes the original pickle. The original is
-    only deleted after a successful round-trip read of the new FITS file.
+    Reads the pickled cutout, re-derives its catalog tables from the full-CCD
+    catalogs, writes the FITS file (atomically), verifies it is readable, and
+    optionally removes the original pickle. The original is only deleted after
+    a successful round-trip read of the new FITS file.
+
+    Legacy pickles carry un-propagated catalog tables without the ``*_ref``
+    columns or the proper-motion epochs, so the tables are rebuilt with
+    :meth:`tglc.ffi.FFICutout.derive_catalogs` — the migrated file is
+    equivalent to a freshly generated cutout (including ``PMEPOCH``/
+    ``PMREFEP``) without re-reading the FFIs.
 
     Parameters
     ----------
@@ -455,6 +464,10 @@ def migrate_cutout_pickle(
     fits_path : pathlib.Path, optional
         Output FITS file path. Defaults to ``pkl_path`` with the ``.fits``
         suffix.
+    gaia_catalog, tic_catalog : astropy.table.QTable
+        Full-CCD Gaia and TIC catalogs matching the cutout's camera/CCD, as
+        read from the ECSV catalog files (see
+        :attr:`tglc.utils.manifest.Manifest.gaia_catalog_file`). Not modified.
     cutout_x, cutout_y : int, optional
         Cutout grid indices to set on the unpickled cutout before writing.
         Pickles written before these attributes existed carry no record of
@@ -483,6 +496,9 @@ def migrate_cutout_pickle(
     # Legacy pickles stored int-truncated TICA EXPTIME values; fix before writing so the
     # migrated file carries the exact effective exposure.
     cutout.exposure = _recover_truncated_exposure(float(cutout.exposure), cutout.sector)
+    # Re-deriving a pickle that already carries current-schema tables is idempotent, so
+    # this runs unconditionally.
+    cutout.derive_catalogs(gaia_catalog, tic_catalog)
 
     write_cutout_fits(cutout, fits_path)
     read_cutout_fits(fits_path)

@@ -270,13 +270,14 @@ def test_full_pipeline_after_migration(
     pyticdb_databases,
 ):
     """Run cutouts + epsfs, downgrade outputs to legacy pickle/.npy, then migrate
-    forward and verify `tglc lightcurves` still produces light curves.
+    forward with the `tglc migrate` CLI and verify `tglc lightcurves` still produces
+    light curves.
     """
     import pickle
 
     import numpy as np
 
-    from tglc.io import migrate_cutout_pickle, migrate_epsf_npy
+    from ..synthetic_data import strip_cutout_to_legacy_schema
 
     ccd_directory = tmp_orbit_directory / "cam1" / "ccd1"
 
@@ -302,33 +303,60 @@ def test_full_pipeline_after_migration(
     source_fits = next((ccd_directory / "source").glob("source_*.fits"))
     epsf_fits = next((ccd_directory / "epsf").glob("epsf_*.fits"))
 
-    # Downgrade outputs to legacy format
+    # Downgrade outputs to legacy format: strip the PM epochs and *_ref columns so the
+    # pickle faithfully mirrors a pre-propagation legacy cutout. `cutout` stays as the
+    # equivalence oracle for the migrated file.
     source_pkl = source_fits.with_suffix(".pkl")
     epsf_npy = epsf_fits.with_suffix(".npy")
     cutout = read_cutout_fits(source_fits)
+    legacy_cutout = strip_cutout_to_legacy_schema(read_cutout_fits(source_fits))
     with source_pkl.open("wb") as fp:
-        pickle.dump(cutout, fp, pickle.HIGHEST_PROTOCOL)
+        pickle.dump(legacy_cutout, fp, pickle.HIGHEST_PROTOCOL)
     epsf = read_epsf_fits(epsf_fits)
     np.save(epsf_npy, epsf.array)
     source_fits.unlink()
     epsf_fits.unlink()
 
-    # Migrate forward using the library helpers under test
-    migrate_cutout_pickle(source_pkl, delete_original=True)
-    migrate_epsf_npy(
-        epsf_npy,
-        psf_size=epsf.psf_size,
-        oversample=epsf.oversample,
-        orbit=epsf.orbit,
-        sector=epsf.sector,
-        camera=epsf.camera,
-        ccd=epsf.ccd,
-        cutout_x=epsf.cutout_x,
-        cutout_y=epsf.cutout_y,
-        delete_original=True,
-    )
+    # Migrate forward with the real CLI, exercising work discovery, per-CCD catalog
+    # loading (the ECSVs written by the `catalogs` step above), and re-derivation.
+    with monkeypatch.context() as m:
+        m.setattr(
+            sys,
+            "argv",
+            [
+                "tglc",
+                "migrate",
+                "--tglc-data-dir",
+                str(tmp_path.resolve()),
+                "--orbit",
+                str(TEST_ORBIT),
+                "--ccd",
+                "1,1",
+                "--psf-size",
+                str(epsf.psf_size),
+                "--oversample",
+                str(epsf.oversample),
+                "--delete-original",
+            ],
+        )
+        tglc_main()
     assert not source_pkl.exists()
     assert not epsf_npy.exists()
+
+    # The re-derived catalogs match the pre-downgrade cutout.
+    migrated = read_cutout_fits(source_fits)
+    assert migrated.pm_epoch == pytest.approx(cutout.pm_epoch)
+    assert migrated.pm_reference_epoch == pytest.approx(cutout.pm_reference_epoch)
+    assert migrated.gaia.colnames == cutout.gaia.colnames
+    for column in ("ra", "dec", "ra_ref", "dec_ref"):
+        np.testing.assert_allclose(
+            np.asarray(migrated.gaia[column]), np.asarray(cutout.gaia[column]), rtol=0, atol=1e-9
+        )
+    # The pickle's WCS round-tripped through a FITS header (text-serialized
+    # coefficients), so pixel positions can differ from the oracle's at the 1e-9 px
+    # level; 1e-6 px is far below any physically meaningful scale.
+    np.testing.assert_allclose(migrated.star_positions, cutout.star_positions, rtol=0, atol=1e-6)
+    read_epsf_fits(epsf_fits)
 
     with monkeypatch.context() as m:
         m.setattr(

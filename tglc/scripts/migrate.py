@@ -2,18 +2,29 @@
 TEMPORARY script migrating legacy data products to the FITS format (issue #1).
 
 Converts source cutout pickles (``source_{x}_{y}.pkl``) and ePSF numpy files
-(``epsf_{x}_{y}.npy``) to the FITS formats written by `tglc.io`. Delete this
-script (and its CLI wiring) once the retroactive reprocessing campaign is done.
+(``epsf_{x}_{y}.npy``) to the FITS formats written by `tglc.io`. Cutout
+migration re-derives the Gaia/TIC catalog tables from the per-CCD ECSV
+catalogs (proper-motion propagation, the ``*_ref`` columns, and the
+``PMEPOCH``/``PMREFEP`` epochs), so those catalog files must be on disk;
+regenerate them with ``tglc catalogs`` if needed (database queries only, no
+FFI reads). Cutout FITS files produced by earlier versions of this script
+carry stale catalogs — they are detected by their missing ``PMEPOCH`` keyword
+and re-migrated automatically, without requiring ``--replace``. Delete this
+script (and its CLI wiring) once the retroactive reprocessing campaign is
+done.
 """
 
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 import logging
 from pathlib import Path
 import re
 
+from astropy.io import fits
+from astropy.table import QTable
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
@@ -38,10 +49,27 @@ class _WorkItem:
     cutout_y: int
 
 
-def _discover_work(args: argparse.Namespace) -> list[_WorkItem]:
-    """Find legacy files to migrate, honoring --ccd, --cutout, and --replace."""
-    work = []
+def _existing_fits_is_current(fits_path: Path, kind: str) -> bool:
+    """Whether an existing FITS sibling is current, i.e. skippable without --replace.
+
+    Cutout FITS files written by the old naive migration carry stale catalog tables
+    and are identifiable by their missing ``PMEPOCH`` keyword; they count as not
+    current so re-running the migration repairs them. ePSF files have no staleness
+    marker, so existence is enough. An unreadable FITS file counts as not current.
+    """
+    if kind != "source":
+        return True
+    try:
+        return fits.getheader(fits_path).get("PMEPOCH") is not None
+    except Exception:
+        return False
+
+
+def _discover_work(args: argparse.Namespace) -> dict[tuple[int, int], list[_WorkItem]]:
+    """Find legacy files to migrate per (camera, ccd), honoring --ccd/--cutout/--replace."""
+    work: dict[tuple[int, int], list[_WorkItem]] = {}
     skipped_existing = 0
+    stale_refreshed = 0
     manifest = Manifest(args.tglc_data_dir, orbit=args.orbit)
     for camera, ccd in args.ccd:
         manifest.camera = camera
@@ -61,29 +89,57 @@ def _discover_work(args: argparse.Namespace) -> list[_WorkItem]:
                 cutout_x, cutout_y = int(stem_match[1]), int(stem_match[2])
                 if args.cutout is not None and (cutout_x, cutout_y) not in args.cutout:
                     continue
-                if not args.replace and legacy_path.with_suffix(".fits").is_file():
-                    skipped_existing += 1
-                    continue
-                work.append(_WorkItem(kind, legacy_path, camera, ccd, cutout_x, cutout_y))
+                fits_sibling = legacy_path.with_suffix(".fits")
+                if not args.replace and fits_sibling.is_file():
+                    if _existing_fits_is_current(fits_sibling, kind):
+                        skipped_existing += 1
+                        continue
+                    stale_refreshed += 1
+                work.setdefault((camera, ccd), []).append(
+                    _WorkItem(kind, legacy_path, camera, ccd, cutout_x, cutout_y)
+                )
     if skipped_existing:
         logger.info(
-            f"Skipping {skipped_existing} legacy files that already have FITS files "
+            f"Skipping {skipped_existing} legacy files that already have current FITS files "
             "(use --replace to overwrite)"
         )
+    if stale_refreshed:
+        logger.info(
+            f"Re-migrating {stale_refreshed} cutouts whose FITS files predate proper-motion "
+            "propagation (missing PMEPOCH keyword)"
+        )
     return work
+
+
+def _load_catalogs(manifest: Manifest, camera: int, ccd: int) -> tuple[QTable, QTable] | None:
+    """Read the full-CCD Gaia/TIC ECSV catalogs, or warn and return None if missing."""
+    manifest.camera = camera
+    manifest.ccd = ccd
+    if not (manifest.gaia_catalog_file.is_file() and manifest.tic_catalog_file.is_file()):
+        logger.warning(
+            f"Catalog files for camera {camera} CCD {ccd} not found in "
+            f"{manifest.catalog_directory.resolve()}; skipping cutout migration for this CCD. "
+            f"Generate them with 'tglc catalogs --orbit {manifest.orbit} --ccd {camera},{ccd}' "
+            "(database queries only, no FFI reads)."
+        )
+        return None
+    return QTable.read(manifest.gaia_catalog_file), QTable.read(manifest.tic_catalog_file)
 
 
 def migrate_main(args: argparse.Namespace):
     """Migrate legacy source pickles and ePSF numpy files to FITS."""
     sector = get_sector_containing_orbit(args.orbit)
+    manifest = Manifest(args.tglc_data_dir, orbit=args.orbit)
 
-    def migrate_item(item: _WorkItem) -> str:
+    def migrate_item(item: _WorkItem, gaia_catalog=None, tic_catalog=None) -> str:
         try:
             if item.kind == "source":
                 # Legacy pickles predate the cutout_x/cutout_y attributes, so supply
                 # them from the file name.
                 migrate_cutout_pickle(
                     item.legacy_path,
+                    gaia_catalog=gaia_catalog,
+                    tic_catalog=tic_catalog,
                     cutout_x=item.cutout_x,
                     cutout_y=item.cutout_y,
                     delete_original=args.delete_original,
@@ -108,17 +164,37 @@ def migrate_main(args: argparse.Namespace):
             return "failed"
         return "migrated"
 
-    work = _discover_work(args)
-    with ThreadPoolExecutor(max_workers=args.nprocs) as executor, logging_redirect_tqdm():
-        results = Counter(
-            tqdm(
-                executor.map(migrate_item, work),
-                desc=f"Migrating legacy files for orbit {args.orbit}",
-                unit="file",
-                total=len(work),
-            )
-        )
-    logger.info(f"Migration complete: {results['migrated']} migrated, {results['failed']} failed")
+    work_by_ccd = _discover_work(args)
+    total = sum(len(items) for items in work_by_ccd.values())
+    results = Counter()
+    with (
+        ThreadPoolExecutor(max_workers=args.nprocs) as executor,
+        logging_redirect_tqdm(),
+        tqdm(
+            desc=f"Migrating legacy files for orbit {args.orbit}", unit="file", total=total
+        ) as progress,
+    ):
+        for (camera, ccd), items in work_by_ccd.items():
+            # Full-CCD catalogs can be large, so they are loaded once per CCD (only
+            # when the CCD has cutout pickles) and released before the next CCD.
+            # Threads share them read-only: derive_catalogs never mutates its inputs.
+            catalogs = None
+            if any(item.kind == "source" for item in items):
+                catalogs = _load_catalogs(manifest, camera, ccd)
+                if catalogs is None:
+                    skipped = sum(item.kind == "source" for item in items)
+                    results["skipped"] += skipped
+                    progress.update(skipped)
+                    items = [item for item in items if item.kind != "source"]
+            gaia_catalog, tic_catalog = catalogs if catalogs is not None else (None, None)
+            migrate = partial(migrate_item, gaia_catalog=gaia_catalog, tic_catalog=tic_catalog)
+            for outcome in executor.map(migrate, items):
+                results[outcome] += 1
+                progress.update(1)
+    logger.info(
+        f"Migration complete: {results['migrated']} migrated, {results['failed']} failed, "
+        f"{results['skipped']} skipped (missing catalogs)"
+    )
 
 
 if __name__ == "__main__":
