@@ -65,6 +65,7 @@ def test_write_cutout_fits_roundtrip(tmp_path: Path):
     np.testing.assert_array_equal(loaded.quality, cutout.quality)
 
     assert len(loaded.gaia) == len(cutout.gaia)
+    assert loaded.gaia.colnames == cutout.gaia.colnames
     assert len(loaded.tic) == len(cutout.tic)
     np.testing.assert_array_equal(loaded.tic["TIC"], cutout.tic["TIC"])
 
@@ -178,6 +179,18 @@ def test_cutout_fits_roundtrip_preserves_pm_epoch_and_positions(tmp_path: Path):
     assert loaded.pm_epoch == pytest.approx(cutout.pm_epoch)
     assert loaded.pm_reference_epoch == pytest.approx(cutout.pm_reference_epoch)
     np.testing.assert_array_equal(loaded.star_positions, cutout.star_positions)
+    # Both the propagated and reference-epoch coordinate columns survive the roundtrip.
+    for name in (
+        "ra",
+        "dec",
+        "ra_ref",
+        "dec_ref",
+        f"sector_{cutout.sector}_x_ref",
+        f"sector_{cutout.sector}_y_ref",
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(loaded.gaia[name]), np.asarray(cutout.gaia[name]), err_msg=name
+        )
 
 
 def test_read_cutout_fits_without_pm_epoch_is_none(tmp_path: Path):

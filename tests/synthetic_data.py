@@ -150,6 +150,8 @@ def make_synthetic_cutout(
             "designation": designations,
             "ra": np.array([120.4, 120.5, 120.6, 120.55], dtype=np.float64),
             "dec": np.array([-45.2, -45.25, -45.3, -45.28], dtype=np.float64),
+            "ra_ref": np.array([120.4001, 120.5, 120.6001, 120.55], dtype=np.float64),
+            "dec_ref": np.array([-45.2, -45.2501, -45.3, -45.2801], dtype=np.float64),
             "phot_g_mean_mag": np.array([10.0, 11.5, 12.3, 13.0], dtype=np.float64),
             "phot_bp_mean_mag": np.array([10.2, 11.7, 12.6, 13.3], dtype=np.float64),
             "phot_rp_mean_mag": np.array([9.7, 11.1, 12.0, 12.7], dtype=np.float64),
@@ -160,6 +162,8 @@ def make_synthetic_cutout(
             "tess_flux_ratio": np.array([1.0, 0.25, 0.12, 0.05], dtype=np.float64),
             f"sector_{sector}_x": np.array([2.5, 5.5, 8.5, 10.5], dtype=np.float64),
             f"sector_{sector}_y": np.array([3.5, 6.5, 8.5, 9.5], dtype=np.float64),
+            f"sector_{sector}_x_ref": np.array([2.45, 5.5, 8.55, 10.5], dtype=np.float64),
+            f"sector_{sector}_y_ref": np.array([3.5, 6.45, 8.5, 9.55], dtype=np.float64),
         }
     )
     cutout.gaia = gaia

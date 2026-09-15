@@ -149,7 +149,9 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     * MASK -- (size, size) float32 strap weights (``cutout.mask.data``)
     * BADPIX -- (size, size) uint8 bad-pixel mask (``cutout.mask.mask``)
     * CADENCES -- BINTABLE of co-indexed ``time``, ``cadence``, ``quality``
-    * GAIA -- BINTABLE of the gaia catalog
+    * GAIA -- BINTABLE of the gaia catalog (``ra``/``dec`` and the sector
+      pixel columns are propagated to ``PMEPOCH``; the ``*_ref`` columns
+      hold the un-propagated positions at ``PMREFEP``)
     * TIC -- BINTABLE of the TIC <-> Gaia DR3 crossmatch
 
     Parameters

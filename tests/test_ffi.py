@@ -40,6 +40,21 @@ def _oracle_local_position(wcs, ra, dec, pmra, pmdec):
     return float(pixel_x) - 44.0, float(pixel_y)
 
 
+def _oracle_propagated_radec(ra, dec, pmra, pmdec):
+    """Independently propagate one star and return its observation-epoch RA/Dec in degrees."""
+    coordinate = SkyCoord(
+        ra=ra * u.deg,
+        dec=dec * u.deg,
+        pm_ra_cosdec=pmra * u.mas / u.yr,
+        pm_dec=pmdec * u.mas / u.yr,
+        obstime=GAIA_REFERENCE_EPOCH,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ErfaWarning)
+        moved = coordinate.apply_space_motion(new_obstime=OBSERVATION_EPOCH)
+    return float(moved.ra.deg), float(moved.dec.deg)
+
+
 def test_ffi_cutout_repr():
     cutout = make_synthetic_cutout()
     assert repr(cutout) == (
@@ -100,6 +115,31 @@ def test_init_propagates_proper_motion_matches_skycoord():
     assert abs(positions[0][0] - unpropagated[0]) == pytest.approx(0.476, abs=0.02)
     assert abs(positions[0][1] - unpropagated[1]) < 0.01
 
+    # ra/dec keep their names but hold the propagated coordinates; the catalog
+    # (reference epoch) values move to the *_ref columns.
+    for i, (ra, dec, pmra, pmdec) in enumerate(
+        [(120.5, -45.25, 1000.0, 0.0), (120.45, -45.2, 0.0, 1000.0)]
+    ):
+        assert cutout.gaia["ra_ref"][i] == ra
+        assert cutout.gaia["dec_ref"][i] == dec
+        expected_ra, expected_dec = _oracle_propagated_radec(ra, dec, pmra, pmdec)
+        assert cutout.gaia["ra"][i] == pytest.approx(expected_ra, abs=1e-10)
+        assert cutout.gaia["dec"][i] == pytest.approx(expected_dec, abs=1e-10)
+
+    # The *_ref pixel columns hold the un-propagated positions.
+    ref_positions = np.array(
+        [
+            cutout.gaia[f"sector_{cutout.sector}_x_ref"],
+            cutout.gaia[f"sector_{cutout.sector}_y_ref"],
+        ]
+    ).T
+    expected_ref = [
+        _oracle_local_position(cutout.wcs, 120.5, -45.25, 0.0, 0.0),
+        _oracle_local_position(cutout.wcs, 120.45, -45.2, 0.0, 0.0),
+    ]
+    np.testing.assert_allclose(ref_positions, expected_ref, atol=1e-6)
+    assert abs(ref_positions[0][0] - positions[0][0]) == pytest.approx(0.476, abs=0.02)
+
 
 def test_init_fully_populated_pm_catalog_does_not_crash():
     """Regression test: catalogs with no missing PM values crashed on `.mask` access."""
@@ -139,6 +179,13 @@ def test_init_partially_masked_pm_stays_at_catalog_position():
     # The missing PM survives as the NaN-masked MaskedColumn read_cutout_fits expects.
     assert bool(cutout.gaia["pmra"].mask[1])
     assert np.isnan(np.asarray(cutout.gaia["pmra"])[1])
+    # The masked-PM star stays at its catalog position in both coordinate systems.
+    assert cutout.gaia["ra"][1] == pytest.approx(cutout.gaia["ra_ref"][1], abs=1e-9)
+    assert cutout.gaia["dec"][1] == pytest.approx(cutout.gaia["dec_ref"][1], abs=1e-9)
+    for axis in ("x", "y"):
+        assert cutout.gaia[f"sector_{cutout.sector}_{axis}"][1] == pytest.approx(
+            cutout.gaia[f"sector_{cutout.sector}_{axis}_ref"][1], abs=1e-6
+        )
 
 
 def test_init_zero_pm_star_position_unchanged():
@@ -150,6 +197,13 @@ def test_init_zero_pm_star_position_unchanged():
     np.testing.assert_allclose(
         cutout.star_positions[0], [float(raw_x) - 44.0, float(raw_y)], atol=1e-6
     )
+    # With zero PM the propagated and reference-epoch columns agree.
+    assert cutout.gaia["ra"][0] == pytest.approx(cutout.gaia["ra_ref"][0], abs=1e-9)
+    assert cutout.gaia["dec"][0] == pytest.approx(cutout.gaia["dec_ref"][0], abs=1e-9)
+    for axis in ("x", "y"):
+        assert cutout.gaia[f"sector_{cutout.sector}_{axis}"][0] == pytest.approx(
+            cutout.gaia[f"sector_{cutout.sector}_{axis}_ref"][0], abs=1e-6
+        )
 
 
 def test_init_all_pm_masked_does_not_crash():
@@ -213,6 +267,18 @@ def test_init_empty_gaia_selection():
 
     assert len(cutout.gaia) == 0
     assert cutout.star_positions.shape == (0, 2)
+    # The pre/post-propagation column schema is stable even for empty selections.
+    for name in (
+        "ra",
+        "dec",
+        "ra_ref",
+        "dec_ref",
+        f"sector_{cutout.sector}_x",
+        f"sector_{cutout.sector}_y",
+        f"sector_{cutout.sector}_x_ref",
+        f"sector_{cutout.sector}_y_ref",
+    ):
+        assert name in cutout.gaia.colnames
 
 
 def test_init_records_propagation_epochs():

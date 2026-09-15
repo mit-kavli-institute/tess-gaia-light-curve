@@ -96,7 +96,12 @@ class FFICutout:
         present) to the median cadence epoch of the cutout using the catalog
         proper motions, before spatial selection and WCS conversion. The
         epochs used are recorded in the ``pm_epoch`` and
-        ``pm_reference_epoch`` attributes (Julian years).
+        ``pm_reference_epoch`` attributes (Julian years). The ``gaia`` table
+        records positions at both epochs: ``ra``/``dec`` and
+        ``sector_{sector}_x``/``sector_{sector}_y`` hold the propagated
+        (``pm_epoch``) values, while ``ra_ref``/``dec_ref`` and
+        ``sector_{sector}_x_ref``/``sector_{sector}_y_ref`` hold the
+        un-propagated catalog positions at ``pm_reference_epoch``.
 
         Parameters
         ----------
@@ -221,9 +226,16 @@ class FFICutout:
                     new_obstime=observation_epoch
                 )
                 gaia_x, gaia_y = wcs.world_to_pixel(propagated_coordinates)
+                gaia_x_ref, gaia_y_ref = wcs.world_to_pixel(gaia_sky_coordinates)
+            propagated_ra = np.asarray(propagated_coordinates.ra.deg, dtype=np.float64)
+            propagated_dec = np.asarray(propagated_coordinates.dec.deg, dtype=np.float64)
         else:
             gaia_x = np.zeros(0)
             gaia_y = np.zeros(0)
+            gaia_x_ref = np.zeros(0)
+            gaia_y_ref = np.zeros(0)
+            propagated_ra = np.zeros(0)
+            propagated_dec = np.zeros(0)
         gaia_x_in_source = (self.ccd_x - filter_margin <= gaia_x) & (
             gaia_x <= self.ccd_x + size + filter_margin
         )
@@ -234,6 +246,8 @@ class FFICutout:
         catalogdata = gaia_catalog[gaia_in_source]
         x_gaia = gaia_x[gaia_in_source] - self.ccd_x
         y_gaia = gaia_y[gaia_in_source] - self.ccd_y
+        x_gaia_ref = gaia_x_ref[gaia_in_source] - self.ccd_x
+        y_gaia_ref = gaia_y_ref[gaia_in_source] - self.ccd_y
 
         # TIC rows only feed the TIC <-> Gaia ID crossmatch, so their positions are not
         # proper-motion propagated (TIC positions are referred to J2000, not J2016).
@@ -267,6 +281,20 @@ class FFICutout:
             col_mask = np.ma.getmaskarray(catalogdata[name]) | ~np.isfinite(values)
             catalogdata[name] = MaskedColumn(np.where(col_mask, np.nan, values), mask=col_mask)
 
+        # ra/dec keep their usual names but hold positions at pm_epoch, so downstream
+        # consumers stay epoch-consistent with the pixel positions; the un-propagated
+        # catalog positions at pm_reference_epoch move to the *_ref columns.
+        ra_ref = np.asarray(catalogdata["ra"], dtype=np.float64)
+        dec_ref = np.asarray(catalogdata["dec"], dtype=np.float64)
+        catalogdata["ra"] = Column(propagated_ra[gaia_in_source])
+        catalogdata["dec"] = Column(propagated_dec[gaia_in_source])
+        catalogdata.add_column(
+            Column(ra_ref), name="ra_ref", index=catalogdata.colnames.index("dec") + 1
+        )
+        catalogdata.add_column(
+            Column(dec_ref), name="dec_ref", index=catalogdata.colnames.index("ra_ref") + 1
+        )
+
         tess_mag = np.ma.filled(
             np.ma.masked_invalid(
                 convert_gaia_mags_to_tmag(
@@ -295,6 +323,8 @@ class FFICutout:
         )
         t[f"sector_{self.sector}_x"] = x_gaia[in_frame]
         t[f"sector_{self.sector}_y"] = y_gaia[in_frame]
+        t[f"sector_{self.sector}_x_ref"] = x_gaia_ref[in_frame]
+        t[f"sector_{self.sector}_y_ref"] = y_gaia_ref[in_frame]
         catalogdata = hstack([catalogdata[in_frame], t])
         catalogdata.sort("tess_mag")
         self.gaia = catalogdata
@@ -316,7 +346,7 @@ class FFICutout:
         Pixel positions of the cutout's Gaia stars in this sector.
 
         Reads the sector-specific ``sector_{sector}_x``/``sector_{sector}_y`` columns of the
-        Gaia catalog table.
+        Gaia catalog table (proper-motion propagated to ``pm_epoch``).
 
         Returns
         -------
