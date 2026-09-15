@@ -34,6 +34,7 @@ def make_cutouts_main(args: argparse.Namespace):
             produce_mask=False,
             nprocs=args.nprocs,
             replace=args.replace,
+            filter_margin=args.filter_margin,
         )
 
 

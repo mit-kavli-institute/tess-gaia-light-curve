@@ -5,17 +5,16 @@ are compatible with subsequent steps.
 """
 
 from pathlib import Path
-import pickle
 import re
 import shutil
 import sys
 
 from astropy.table import QTable
 import h5py
-import numpy as np
 import pytest
 
 from tglc.__main__ import tglc_main
+from tglc.io import read_cutout_fits, read_epsf_fits
 
 from ..sample_data import SAMPLE_DATA_DIRECTORY
 
@@ -153,8 +152,8 @@ def test_full_pipeline_with_commands(
     source_files = list(source_directory.iterdir())
     assert len(source_files) == 1
     for source_file in source_files:
-        with open(source_file, "rb") as source_pickle:
-            pickle.load(source_pickle)
+        assert source_file.suffix == ".fits"
+        read_cutout_fits(source_file)
 
     with monkeypatch.context() as m:
         m.setattr(
@@ -179,7 +178,8 @@ def test_full_pipeline_with_commands(
     epsf_files = list(epsf_directory.iterdir())
     assert len(epsf_files) == 1
     for epsf_file in epsf_files:
-        np.load(epsf_file)
+        assert epsf_file.suffix == ".fits"
+        read_epsf_fits(epsf_file)
 
     with monkeypatch.context() as m:
         m.setattr(
@@ -245,17 +245,141 @@ def test_full_pipeline_with_all(
     source_files = list(source_directory.iterdir())
     assert len(source_files) == 1
     for source_file in source_files:
-        with open(source_file, "rb") as source_pickle:
-            pickle.load(source_pickle)
+        assert source_file.suffix == ".fits"
+        read_cutout_fits(source_file)
 
     epsf_directory = ccd_directory / "epsf"
     epsf_files = list(epsf_directory.iterdir())
     assert len(epsf_files) == 1
     for epsf_file in epsf_files:
-        np.load(epsf_file)
+        assert epsf_file.suffix == ".fits"
+        read_epsf_fits(epsf_file)
 
     lc_directory = ccd_directory / "LC"
     lc_files = list(lc_directory.iterdir())
+    assert len(lc_files) > 0
+    for lc_file in lc_files:
+        with h5py.File(lc_file) as lc_data:
+            assert "LightCurve" in lc_data.keys()
+
+
+def test_full_pipeline_after_migration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tmp_orbit_directory: Path,
+    pyticdb_databases,
+):
+    """Run cutouts + epsfs, downgrade outputs to legacy pickle/.npy, then migrate
+    forward with the `tglc migrate` CLI and verify `tglc lightcurves` still produces
+    light curves.
+    """
+    import pickle
+
+    import numpy as np
+
+    from ..synthetic_data import strip_cutout_to_legacy_schema
+
+    ccd_directory = tmp_orbit_directory / "cam1" / "ccd1"
+
+    for tglc_command in ("catalogs", "cutouts", "epsfs"):
+        with monkeypatch.context() as m:
+            m.setattr(
+                sys,
+                "argv",
+                [
+                    "tglc",
+                    tglc_command,
+                    "--tglc-data-dir",
+                    str(tmp_path.resolve()),
+                    "--orbit",
+                    str(TEST_ORBIT),
+                    "--ccd",
+                    "1,1",
+                ]
+                + (["--cutout", "0,0"] if tglc_command != "catalogs" else []),
+            )
+            tglc_main()
+
+    source_fits = next((ccd_directory / "source").glob("source_*.fits"))
+    epsf_fits = next((ccd_directory / "epsf").glob("epsf_*.fits"))
+
+    # Downgrade outputs to legacy format: strip the PM epochs and *_ref columns so the
+    # pickle faithfully mirrors a pre-propagation legacy cutout. `cutout` stays as the
+    # equivalence oracle for the migrated file.
+    source_pkl = source_fits.with_suffix(".pkl")
+    epsf_npy = epsf_fits.with_suffix(".npy")
+    cutout = read_cutout_fits(source_fits)
+    legacy_cutout = strip_cutout_to_legacy_schema(read_cutout_fits(source_fits))
+    with source_pkl.open("wb") as fp:
+        pickle.dump(legacy_cutout, fp, pickle.HIGHEST_PROTOCOL)
+    epsf = read_epsf_fits(epsf_fits)
+    np.save(epsf_npy, epsf.array)
+    source_fits.unlink()
+    epsf_fits.unlink()
+
+    # Migrate forward with the real CLI, exercising work discovery, per-CCD catalog
+    # loading (the ECSVs written by the `catalogs` step above), and re-derivation.
+    with monkeypatch.context() as m:
+        m.setattr(
+            sys,
+            "argv",
+            [
+                "tglc",
+                "migrate",
+                "--tglc-data-dir",
+                str(tmp_path.resolve()),
+                "--orbit",
+                str(TEST_ORBIT),
+                "--ccd",
+                "1,1",
+                "--psf-size",
+                str(epsf.psf_size),
+                "--oversample",
+                str(epsf.oversample),
+                "--delete-original",
+            ],
+        )
+        tglc_main()
+    assert not source_pkl.exists()
+    assert not epsf_npy.exists()
+
+    # The re-derived catalogs match the pre-downgrade cutout.
+    migrated = read_cutout_fits(source_fits)
+    assert migrated.pm_epoch == pytest.approx(cutout.pm_epoch)
+    assert migrated.pm_reference_epoch == pytest.approx(cutout.pm_reference_epoch)
+    # The cutouts and migrate CLIs share the same --filter-margin default.
+    assert migrated.filter_margin == cutout.filter_margin
+    assert migrated.gaia.colnames == cutout.gaia.colnames
+    for column in ("ra", "dec", "ra_ref", "dec_ref"):
+        np.testing.assert_allclose(
+            np.asarray(migrated.gaia[column]), np.asarray(cutout.gaia[column]), rtol=0, atol=1e-9
+        )
+    # The pickle's WCS round-tripped through a FITS header (text-serialized
+    # coefficients), so pixel positions can differ from the oracle's at the 1e-9 px
+    # level; 1e-6 px is far below any physically meaningful scale.
+    np.testing.assert_allclose(migrated.star_positions, cutout.star_positions, rtol=0, atol=1e-6)
+    read_epsf_fits(epsf_fits)
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            sys,
+            "argv",
+            [
+                "tglc",
+                "lightcurves",
+                "--tglc-data-dir",
+                str(tmp_path.resolve()),
+                "--orbit",
+                str(TEST_ORBIT),
+                "--ccd",
+                "1,1",
+                "--cutout",
+                "0,0",
+            ],
+        )
+        tglc_main()
+
+    lc_files = list((ccd_directory / "LC").iterdir())
     assert len(lc_files) > 0
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:

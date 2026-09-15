@@ -28,6 +28,13 @@ TESS pixel saturation level, from the TESS Instrument Handbook, p37.
 See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
 """
 
+DEFAULT_FILTER_MARGIN = 6.0
+"""
+Default extra margin in pixels applied to the star selection window around a cutout,
+admitting halo stars just outside the cutout whose PSF wings overlap it. ~0.5 px beyond
+the 5.5 px half-width of the 11 px ePSF stamp, as headroom for proper motion errors.
+"""
+
 
 def convert_tess_flux_to_tess_magnitude(flux: u.Quantity) -> npt.ArrayLike:
     """
@@ -70,6 +77,19 @@ def get_exposure_time_from_sector(sector: int) -> u.Quantity:
     else:
         # Second extended mission and beyond
         return 200 * u.second
+
+
+def get_effective_exposure_time_from_sector(sector: int) -> u.Quantity:
+    """
+    Get the effective per-cadence integration time (in seconds) for the given sector.
+
+    This is the value TICA reports as ``EXPTIME``: the FFI cadence length from
+    `get_exposure_time_from_sector` scaled by 0.8 (onboard cosmic-ray mitigation keeps 8 of every
+    10 two-second frames) and 0.99 (each frame integrates for 1.98 of its 2 seconds).
+    """
+    # Computed as * 792 / 1000 so results match TICA EXPTIME header values (e.g. 158.4)
+    # bit-for-bit, which * 0.8 * 0.99 in floating point does not guarantee.
+    return get_exposure_time_from_sector(sector) * 792 / 1000
 
 
 def get_sector_containing_orbit(orbit: int) -> int:
