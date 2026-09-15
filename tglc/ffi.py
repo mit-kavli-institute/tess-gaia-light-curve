@@ -351,6 +351,7 @@ def ffi(
     produce_mask: bool = False,
     nprocs: int = 1,
     replace: bool = False,
+    ffi_cbv_file: Path | None = None,
 ):
     """
     Produce `Source` object pickle file from calibrated FFI files.
@@ -380,6 +381,11 @@ def ffi(
         Processes to use for in multiprocessing pool. Default = 1.
     replace : bool
         Replace existing files with new data. Default = False.
+    ffi_cbv_file : Path | None
+        If given, a QLP-CBV "draft-1" FFI CBV FITS file whose per-pixel trend is
+        subtracted from the loaded FFI flux before cutouts are written. Cadences
+        not present in the CBV product and pixels absent from the CBV WEIGHTS
+        tables are passed through unchanged. Default = None (no correction).
     """
     manifest.orbit = orbit
     manifest.camera = camera
@@ -440,6 +446,20 @@ def ffi(
 
     if np.min(np.diff(cadence)) != 1:
         logger.warning(f"{(np.diff(cadence) != 1).sum()} cadence gaps != 1 detected.")
+
+    # Apply CBV-based FFI correction before bad-pixel detection so downstream
+    # statistics see the detrended flux. No-op when ffi_cbv_file is None.
+    if ffi_cbv_file is not None:
+        if ffi_cbv_file.is_file():
+            from tglc.ffi_cbv import apply_cbv_correction
+
+            logger.info(f"Applying FFI CBV correction from {ffi_cbv_file.resolve()}")
+            apply_cbv_correction(flux, cadence, ffi_cbv_file)
+        else:
+            logger.warning(
+                f"FFI CBV file not found at {ffi_cbv_file.resolve()} — "
+                "FFI pixels will not be CBV-corrected."
+            )
 
     # Load or save mask
     numba.set_num_threads(nprocs)

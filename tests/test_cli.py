@@ -8,6 +8,8 @@ import importlib
 import os
 from pathlib import Path
 
+import pytest
+
 from tglc import cli
 
 
@@ -64,3 +66,18 @@ def test_tglc_data_dir_falls_back_to_cwd(tmp_path: Path):
     with tmp_chdir(tmp_path):
         args = cli.command_base_parser.parse_args(["-o", "1"])
         assert args.tglc_data_dir == tmp_path
+
+
+def test_cutouts_parser_accepts_ffi_cbv_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The cutouts subcommand exposes --ffi-cbv-dir; the path is parsed as a Path."""
+    cbv_dir = tmp_path / "cbvs"
+    monkeypatch.setattr("sys.argv", ["tglc", "cutouts", "-o", "42", "--ffi-cbv-dir", str(cbv_dir)])
+    args = cli.parse_tglc_args()
+    assert args.tglc_command == "cutouts"
+    assert args.ffi_cbv_dir == cbv_dir
+
+
+def test_cutouts_parser_ffi_cbv_dir_default_none(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["tglc", "cutouts", "-o", "42"])
+    args = cli.parse_tglc_args()
+    assert args.ffi_cbv_dir is None
