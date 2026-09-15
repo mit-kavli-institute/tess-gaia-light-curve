@@ -78,6 +78,22 @@ def test_migrate_main_migrates_cutouts_and_epsfs(tmp_path: Path):
     assert f"sector_{loaded.sector}_x_ref" in loaded.gaia.colnames
 
 
+def test_migrate_main_multiprocessing(tmp_path: Path):
+    """nprocs > 1 uses worker processes: work items and config must survive pickling.
+
+    Under a "spawn" start method the workers' catalog cache starts empty, also exercising
+    the read-from-path fallback ("fork" workers inherit the parent's pre-loaded cache).
+    """
+    pkl_path, npy_path = _make_migration_tree(tmp_path)
+
+    migrate_main(_migrate_args(tmp_path, nprocs=2))
+
+    source_fits = pkl_path.with_suffix(".fits")
+    assert source_fits.is_file()
+    assert npy_path.with_suffix(".fits").is_file()
+    assert fits.getheader(source_fits)["PMEPOCH"] is not None
+
+
 def test_migrate_main_missing_catalogs_skips_cutouts_but_migrates_epsfs(tmp_path: Path):
     pkl_path, npy_path = _make_migration_tree(tmp_path, with_catalogs=False)
 

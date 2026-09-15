@@ -272,8 +272,7 @@ def parse_tglc_args() -> argparse.Namespace:
         "catalogs, which must be on disk (regenerate with 'tglc catalogs' if needed; no FFI "
         "reads involved). Existing cutout FITS files missing the PMEPOCH keyword (produced "
         "by the old naive migration), or whose FILTMARG keyword is absent or differs from "
-        "the requested --filter-margin, are re-migrated automatically without --replace. "
-        "For this command, -n/--nprocs is the number of threads used.",
+        "the requested --filter-margin, are re-migrated automatically without --replace.",
         help="Migrate legacy .pkl/.npy data products to FITS (temporary)",
         parents=[command_base_parser],
     )

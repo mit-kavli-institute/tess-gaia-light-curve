@@ -17,7 +17,6 @@ reprocessing campaign is done.
 
 import argparse
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 import logging
@@ -32,6 +31,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 from tglc.io import migrate_cutout_pickle, migrate_epsf_npy
 from tglc.utils.constants import get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
+from tglc.utils.mapping import pool_map_if_multiprocessing
 
 
 logger = logging.getLogger(__name__)
@@ -114,8 +114,26 @@ def _discover_work(args: argparse.Namespace) -> dict[tuple[int, int], list[_Work
     return work
 
 
-def _load_catalogs(manifest: Manifest, camera: int, ccd: int) -> tuple[QTable, QTable] | None:
-    """Read the full-CCD Gaia/TIC ECSV catalogs, or warn and return None if missing."""
+# Full-CCD catalog tables keyed by their (gaia, tic) file paths. Holds at most one CCD's
+# catalogs. migrate_main warms it in the parent process before creating each per-CCD pool,
+# so under the "fork" start method (the tglc default, see tglc.__main__) workers inherit
+# the tables copy-on-write instead of each task pickling them or each worker re-reading
+# the ECSV files. Under "spawn" the cache starts empty in every worker, which then falls
+# back to reading the files once.
+_catalog_cache: dict[tuple[Path, Path], tuple[QTable, QTable]] = {}
+
+
+def _get_catalogs(gaia_catalog_file: Path, tic_catalog_file: Path) -> tuple[QTable, QTable]:
+    """Read the full-CCD Gaia/TIC ECSV catalogs, reusing (and refilling) `_catalog_cache`."""
+    key = (gaia_catalog_file, tic_catalog_file)
+    if key not in _catalog_cache:
+        _catalog_cache.clear()
+        _catalog_cache[key] = (QTable.read(gaia_catalog_file), QTable.read(tic_catalog_file))
+    return _catalog_cache[key]
+
+
+def _load_catalogs(manifest: Manifest, camera: int, ccd: int) -> tuple[Path, Path] | None:
+    """Locate and pre-load the full-CCD catalogs, returning their paths, or None if missing."""
     manifest.camera = camera
     manifest.ccd = ccd
     if not (manifest.gaia_catalog_file.is_file() and manifest.tic_catalog_file.is_file()):
@@ -126,7 +144,60 @@ def _load_catalogs(manifest: Manifest, camera: int, ccd: int) -> tuple[QTable, Q
             "(database queries only, no FFI reads)."
         )
         return None
-    return QTable.read(manifest.gaia_catalog_file), QTable.read(manifest.tic_catalog_file)
+    catalog_files = (manifest.gaia_catalog_file, manifest.tic_catalog_file)
+    _get_catalogs(*catalog_files)
+    return catalog_files
+
+
+def _migrate_item(
+    item: _WorkItem,
+    *,
+    catalog_files: tuple[Path, Path] | None,
+    filter_margin: float,
+    psf_size: int,
+    oversample: int,
+    orbit: int,
+    sector: int,
+    delete_original: bool,
+) -> str:
+    """Migrate one legacy file, returning "migrated" or "failed".
+
+    Runs in worker processes: everything it takes is cheap to pickle (the catalogs
+    travel as file paths and are resolved through `_get_catalogs`).
+    """
+    try:
+        if item.kind == "source":
+            gaia_catalog, tic_catalog = _get_catalogs(*catalog_files)
+            # Legacy pickles predate the cutout_x/cutout_y attributes, so supply
+            # them from the file name.
+            migrate_cutout_pickle(
+                item.legacy_path,
+                gaia_catalog=gaia_catalog,
+                tic_catalog=tic_catalog,
+                cutout_x=item.cutout_x,
+                cutout_y=item.cutout_y,
+                filter_margin=filter_margin,
+                delete_original=delete_original,
+            )
+        else:
+            # migrate_epsf_npy validates the array shape against psf_size/oversample and
+            # raises ValueError on mismatch, which is logged and counted below.
+            migrate_epsf_npy(
+                item.legacy_path,
+                psf_size=psf_size,
+                oversample=oversample,
+                orbit=orbit,
+                sector=sector,
+                camera=item.camera,
+                ccd=item.ccd,
+                cutout_x=item.cutout_x,
+                cutout_y=item.cutout_y,
+                delete_original=delete_original,
+            )
+    except Exception:
+        logger.warning(f"Failed to migrate {item.legacy_path.resolve()}", exc_info=True)
+        return "failed"
+    return "migrated"
 
 
 def migrate_main(args: argparse.Namespace):
@@ -134,65 +205,46 @@ def migrate_main(args: argparse.Namespace):
     sector = get_sector_containing_orbit(args.orbit)
     manifest = Manifest(args.tglc_data_dir, orbit=args.orbit)
 
-    def migrate_item(item: _WorkItem, gaia_catalog=None, tic_catalog=None) -> str:
-        try:
-            if item.kind == "source":
-                # Legacy pickles predate the cutout_x/cutout_y attributes, so supply
-                # them from the file name.
-                migrate_cutout_pickle(
-                    item.legacy_path,
-                    gaia_catalog=gaia_catalog,
-                    tic_catalog=tic_catalog,
-                    cutout_x=item.cutout_x,
-                    cutout_y=item.cutout_y,
-                    filter_margin=args.filter_margin,
-                    delete_original=args.delete_original,
-                )
-            else:
-                # migrate_epsf_npy validates the array shape against psf_size/oversample and
-                # raises ValueError on mismatch, which is logged and counted below.
-                migrate_epsf_npy(
-                    item.legacy_path,
-                    psf_size=args.psf_size,
-                    oversample=args.oversample,
-                    orbit=args.orbit,
-                    sector=sector,
-                    camera=item.camera,
-                    ccd=item.ccd,
-                    cutout_x=item.cutout_x,
-                    cutout_y=item.cutout_y,
-                    delete_original=args.delete_original,
-                )
-        except Exception:
-            logger.warning(f"Failed to migrate {item.legacy_path.resolve()}", exc_info=True)
-            return "failed"
-        return "migrated"
-
     work_by_ccd = _discover_work(args)
     total = sum(len(items) for items in work_by_ccd.values())
     results = Counter()
     with (
-        ThreadPoolExecutor(max_workers=args.nprocs) as executor,
         logging_redirect_tqdm(),
         tqdm(
             desc=f"Migrating legacy files for orbit {args.orbit}", unit="file", total=total
         ) as progress,
     ):
         for (camera, ccd), items in work_by_ccd.items():
-            # Full-CCD catalogs can be large, so they are loaded once per CCD (only
-            # when the CCD has cutout pickles) and released before the next CCD.
-            # Threads share them read-only: derive_catalogs never mutates its inputs.
-            catalogs = None
+            # Full-CCD catalogs can be large, so they are loaded once per CCD (only when
+            # the CCD has cutout pickles) and released before the next CCD. Loading them
+            # here, before the per-CCD pool is created, lets forked workers inherit the
+            # tables copy-on-write (see _catalog_cache); derive_catalogs never mutates
+            # its inputs.
+            catalog_files = None
             if any(item.kind == "source" for item in items):
-                catalogs = _load_catalogs(manifest, camera, ccd)
-                if catalogs is None:
+                catalog_files = _load_catalogs(manifest, camera, ccd)
+                if catalog_files is None:
                     skipped = sum(item.kind == "source" for item in items)
                     results["skipped"] += skipped
                     progress.update(skipped)
                     items = [item for item in items if item.kind != "source"]
-            gaia_catalog, tic_catalog = catalogs if catalogs is not None else (None, None)
-            migrate = partial(migrate_item, gaia_catalog=gaia_catalog, tic_catalog=tic_catalog)
-            for outcome in executor.map(migrate, items):
+            if not items:
+                continue
+            # Worker processes rather than threads: the proper-motion propagation in
+            # derive_catalogs is CPU-bound and holds the GIL.
+            migrate = partial(
+                _migrate_item,
+                catalog_files=catalog_files,
+                filter_margin=args.filter_margin,
+                psf_size=args.psf_size,
+                oversample=args.oversample,
+                orbit=args.orbit,
+                sector=sector,
+                delete_original=args.delete_original,
+            )
+            for outcome in pool_map_if_multiprocessing(
+                migrate, items, nprocs=args.nprocs, pool_map_method="imap_unordered"
+            ):
                 results[outcome] += 1
                 progress.update(1)
     logger.info(
