@@ -305,8 +305,8 @@ def main():
             power_aggregate,
             power_p16,
             power_p84,
-            f"Residual MAD vs weighting power ({len(power_matrix)} cutouts, "
-            f"edge factor {edge_factor_label})",
+            f"Residual MAD vs weighting power\n"
+            f"({len(power_matrix)} cutouts, edge factor {edge_factor_label})",
             f"normalized mad_{args.metric}",
         )
         best_power = select_minimum(powers, power_aggregate)
