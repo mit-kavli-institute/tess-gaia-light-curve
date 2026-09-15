@@ -2,7 +2,9 @@
 
 Golden values were generated against 92df5c1 (pre-refactor) with
 `np.array2string(..., floatmode="unique")`. Regenerating them defeats the purpose -- they pin
-the behavior the explicit-steps refactor must preserve bit-for-bit.
+the behavior the explicit-steps refactor must preserve bit-for-bit. One deliberate exception:
+the small-aperture values were regenerated after the high-background cadence mask fix
+(issue #19), which changed the set of cadences the photometric normalization uses.
 """
 
 from math import ceil, floor
@@ -189,16 +191,18 @@ def test_generate_light_curves_characterization(monkeypatch):
             4.495941784997689,
         ],
     )
+    # Small-aperture golden values regenerated after the issue #19 mask fix: the corrected
+    # mask flags no cadences here, so the normalization median is taken over all five.
     np.testing.assert_array_equal(
         light_curve["small_aperture_magnitude"],
-        [9.950032374765069, 9.950079058481862, 9.949967678645303, 9.95, 9.95000810091382],
+        [9.950024273670133, 9.950070957038596, 9.949959578033074, 9.94999189914662, 9.95],
     )
     np.testing.assert_array_equal(
         light_curve["large_aperture_magnitude"],
         [9.950031176713066, 9.950022034783288, 9.95, 9.949989191407335, 9.949978838176177],
     )
     assert light_curve.meta["primary_aperture_local_background"] == -1129937.174836132 * u.electron
-    assert light_curve.meta["small_aperture_local_background"] == -125548.63178431898 * u.electron
+    assert light_curve.meta["small_aperture_local_background"] == -125549.56932326572 * u.electron
     assert light_curve.meta["large_aperture_local_background"] == -3138756.963741101 * u.electron
 
 
@@ -328,17 +332,51 @@ def test_get_psf_portion_collapses_time_and_normalizes():
 # ---------------------------------------------------------------------
 
 
-def test_get_high_background_cadence_mask_uses_y_strap_column():
-    """Quirk pin for issue #19: the mask is driven by the y_strap column, not flat."""
+def test_get_high_background_cadence_mask_uses_flat_column():
+    """The mask is driven by the flat background column, not y_strap (issue #19)."""
     _, epsf = _make_cutout_and_epsf()
     epsf.array[:, :] = 1.0
     # y_strap (column -6) outlier on cadence 1; flat (column -1) outlier on cadence 3
     epsf.array[:, -6] = [1.05, 100.0, 1.0, 1.0, 1.1]
+    epsf.array[:, -1] = [1.0, 1.1, 0.9, 100.0, 1.0]
+
+    mask = get_high_background_cadence_mask(epsf)
+
+    np.testing.assert_array_equal(mask, [False, False, False, True, False])
+
+
+def test_get_high_background_cadence_mask_three_sigma_threshold():
+    """Ordinary background scatter stays unflagged at the 3-sigma threshold (issue #19).
+
+    A linear ramp has deviations of up to 2x the MAD-standard-deviation from its median; the
+    mistranscribed 1-sigma threshold flagged its first and last cadences.
+    """
+    _, epsf = _make_cutout_and_epsf()
+    epsf.array[:, -1] = [0.0, 1.0, 2.0, 3.0, 4.0]
+
+    mask = get_high_background_cadence_mask(epsf)
+
+    np.testing.assert_array_equal(mask, [False, False, False, False, False])
+
+
+def test_get_high_background_cadence_mask_constant_background():
+    """A constant background yields a zero MAD; the >= comparison must not flag everything."""
+    _, epsf = _make_cutout_and_epsf()
+    epsf.array[:, -1] = 1.0
+
+    mask = get_high_background_cadence_mask(epsf)
+
+    np.testing.assert_array_equal(mask, [False, False, False, False, False])
+
+
+def test_get_high_background_cadence_mask_constant_background_with_outlier():
+    """With a zero MAD, only cadences actually deviating from the median are flagged."""
+    _, epsf = _make_cutout_and_epsf()
     epsf.array[:, -1] = [1.0, 1.0, 1.0, 100.0, 1.0]
 
     mask = get_high_background_cadence_mask(epsf)
 
-    np.testing.assert_array_equal(mask, [False, True, False, False, False])
+    np.testing.assert_array_equal(mask, [False, False, False, True, False])
 
 
 def test_get_background_model_matches_legacy_expression():
