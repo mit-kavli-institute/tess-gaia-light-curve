@@ -4,8 +4,10 @@ Reads the per-cutout CSVs written by `python -m tglc.scripts.edge_compression_sw
 each cutout's MAD-of-residual curve by its own minimum, and plots the per-cutout curves with the
 median aggregate (Figure 4 of Han & Brandt 2023 did this for the flux-weighting power; here the
 swept parameter is the edge-compression factor in TICA units). Also plots the holdout
-cross-validation curve and the wing-mass / flux-fraction / aperture-scatter diagnostics, and
-writes a machine-readable recommendation:
+cross-validation curve, the wing-mass diagnostic, and — when power_*.csv files from a
+--power-sweep campaign are present — the Figure 4 analog proper: normalized residual MAD vs the
+flux-uncertainty weighting power at a fixed edge factor. Writes a machine-readable
+recommendation:
 
 - knee_factor: largest factor whose aggregate in-sample MAD is within --knee-tolerance of the
   curve minimum (the in-sample curve is a plateau with a knee, not a U);
@@ -33,6 +35,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from tglc.scripts.edge_compression_common import (
+    FLUX_UNCERTAINTY_POWER,
     UNIT_CONVERTED_ANCHOR,
     UPSTREAM_EDGE_COMPRESSION,
     select_largest_within_tolerance,
@@ -56,11 +59,13 @@ INTEGER_FIELDS = {
 }
 
 
-def load_sweeps(sweep_dirs: list[Path]) -> dict:
-    """Load per-cutout sweep CSVs keyed by (orbit, cutout_x, cutout_y) -> {factor: row}."""
+def load_sweeps(
+    sweep_dirs: list[Path], pattern: str = "sweep_*.csv", key_column: str = "factor"
+) -> dict:
+    """Load per-cutout sweep CSVs keyed by (orbit, cutout_x, cutout_y) -> {swept value: row}."""
     data = {}
     for directory in sweep_dirs:
-        for path in sorted(Path(directory).glob("sweep_*.csv")):
+        for path in sorted(Path(directory).glob(pattern)):
             with path.open() as f:
                 rows = list(csv.DictReader(f))
             if not rows:
@@ -70,7 +75,7 @@ def load_sweeps(sweep_dirs: list[Path]) -> dict:
                 for key in row:
                     row[key] = int(row[key]) if key in INTEGER_FIELDS else float(row[key])
             cutout_key = (rows[0]["orbit"], rows[0]["cutout_x"], rows[0]["cutout_y"])
-            data[cutout_key] = {row["factor"]: row for row in rows}
+            data[cutout_key] = {row[key_column]: row for row in rows}
     return data
 
 
@@ -281,17 +286,56 @@ def main():
 
     fraction = diagnostic_curve(data, factors, "flux_fraction_median")
     scatter = diagnostic_curve(data, factors, "aperture_scatter_mmag_median")
-    axes[1, 1].plot(positions, fraction, "o-", color="tab:blue", ms=4, label="flux fraction")
-    axes[1, 1].axhline(1.0, color="gray", lw=1, ls="--")
-    axes[1, 1].set(title="Isolated-target diagnostics (medians)", ylabel="epsf_flux_fraction")
-    scatter_axis = axes[1, 1].twinx()
-    scatter_axis.plot(positions, scatter, "s-", color="tab:orange", ms=4, label="3x3 scatter")
-    scatter_axis.set_ylabel("aperture scatter (mmag)")
-    handles1, labels1 = axes[1, 1].get_legend_handles_labels()
-    handles2, labels2 = scatter_axis.get_legend_handles_labels()
-    axes[1, 1].legend(handles1 + handles2, labels1 + labels2, fontsize=8)
 
-    for ax in axes.flat:
+    # Lower-right panel: Han & Brandt 2023 Figure 4 proper — normalized residual MAD vs the
+    # flux-uncertainty weighting power, from the power_*.csv files of a --power-sweep campaign.
+    power_data = load_sweeps(args.sweep_dirs, pattern="power_*.csv", key_column="power")
+    power_curves = build_curves(power_data, f"mad_{args.metric}") if power_data else None
+    best_power = None
+    if power_curves is not None:
+        powers, power_matrix, power_aggregate, power_p16, power_p84 = power_curves
+        edge_factors = {
+            rows[power]["edge_factor"] for rows in power_data.values() for power in rows
+        }
+        edge_factor_label = f"{edge_factors.pop():g}" if len(edge_factors) == 1 else "mixed"
+        plot_mad_panel(
+            axes[1, 1],
+            powers,
+            power_matrix,
+            power_aggregate,
+            power_p16,
+            power_p84,
+            f"Residual MAD vs weighting power ({len(power_matrix)} cutouts, "
+            f"edge factor {edge_factor_label})",
+            f"normalized mad_{args.metric}",
+        )
+        best_power = select_minimum(powers, power_aggregate)
+        minimum_index = np.flatnonzero(powers == best_power)[0]
+        axes[1, 1].plot(
+            powers[minimum_index],
+            power_aggregate[minimum_index],
+            "v",
+            color="black",
+            ms=9,
+            label=f"minimum (l = {best_power:g})",
+        )
+        axes[1, 1].axvline(
+            FLUX_UNCERTAINTY_POWER, color="tab:red", lw=1, ls=":", label="pipeline default 1.4"
+        )
+        axes[1, 1].set_xlabel("weighting power (l)")
+        axes[1, 1].legend(fontsize=8)
+    else:
+        axes[1, 1].text(
+            0.5,
+            0.5,
+            "no power-sweep data\n(run edge_compression_sweep --power-sweep)",
+            ha="center",
+            va="center",
+            transform=axes[1, 1].transAxes,
+        )
+        axes[1, 1].set_xlabel("weighting power (l)")
+
+    for ax in (axes[0, 0], axes[0, 1], axes[1, 0]):
         configure_factor_axis(ax, factors, zero_position)
     fig.tight_layout()
     figure_path = args.outdir / "edge_compression_sweep.pdf"
@@ -309,6 +353,10 @@ def main():
         "wing_mass": [float(v) for v in wing_mass],
         "flux_fraction_median": [float(v) for v in fraction],
         "aperture_scatter_mmag_median": [float(v) for v in scatter],
+        "n_cutouts_power": len(power_matrix) if power_curves else 0,
+        "powers": list(powers) if power_curves else None,
+        "aggregate_power": list(power_aggregate) if power_curves else None,
+        "best_power": best_power,
         **recommendation,
     }
     summary_path = args.outdir / "edge_compression_recommendation.json"

@@ -10,14 +10,19 @@ build the ePSF design matrix once, then refit the ePSF at each candidate edge-co
 - diagnostics: ePSF wing mass beyond +-2 px, and median flux fraction, model/decontaminated-data
   ratio, and 3x3-aperture scatter over isolated Tmag 9-13 targets.
 
-One CSV per cutout (one row per factor). Resumable: cutouts whose CSV already exists are skipped.
-Shardable. The factor grid must be identical across a campaign (see edge_compression_common).
-Aggregate the CSVs with `python -m tglc.scripts.edge_compression_figure`.
+With --power-sweep the roles swap: the edge-compression factor is held fixed (--edge-factor,
+default the full-campaign recommendation) and the flux-uncertainty weighting power is swept
+instead (Han & Brandt 2023 Figure 4 proper, which adopted the MAD minimum at l = 1.4), writing
+power_{x}_{y}.csv files with the same metrics.
+
+One CSV per cutout (one row per swept value). Resumable: cutouts whose CSV already exists are
+skipped. Shardable. The swept grid must be identical across a campaign (see
+edge_compression_common). Aggregate the CSVs with `python -m tglc.scripts.edge_compression_figure`.
 
 Usage (run from the repo root with PYTHONPATH=. so the working tree wins over site-packages):
     python -m tglc.scripts.edge_compression_sweep --source-dir DIR --epsf-dir DIR --outdir DIR
-        [--factors F ...] [--cadences 48] [--holdout-fraction 0.1] [--no-holdout] [--seed 25]
-        [--shard I --num-shards N] [--limit K]
+        [--factors F ...] [--power-sweep [--powers L ...] [--edge-factor F]] [--cadences 48]
+        [--holdout-fraction 0.1] [--no-holdout] [--seed 25] [--shard I --num-shards N] [--limit K]
 """
 
 import argparse
@@ -45,7 +50,10 @@ from tglc.light_curve import (
 from tglc.scripts.edge_compression_common import (
     CSV_FIELDS,
     DEFAULT_FACTORS,
+    DEFAULT_POWERS,
     FLUX_UNCERTAINTY_POWER,
+    POWER_CSV_FIELDS,
+    RECOMMENDED_EDGE_COMPRESSION,
     middle_of_orbit,
     spoc_equivalent,
 )
@@ -239,9 +247,10 @@ def process_cutout(source_path: Path, epsf_path: Path, out_csv: Path, args) -> l
     cadence_indices = choose_cadence_indices(
         cutout, archived, args.cadences, args.min_good_cadences
     )
+    fieldnames = POWER_CSV_FIELDS if args.power_sweep else CSV_FIELDS
     if len(cadence_indices) == 0:
         logger.warning(f"{source_path.name}: too few good cadences, writing empty CSV")
-        write_rows(out_csv, [])
+        write_rows(out_csv, [], fieldnames)
         return []
 
     sliced = slice_cutout(cutout, cadence_indices)
@@ -302,8 +311,13 @@ def process_cutout(source_path: Path, epsf_path: Path, out_csv: Path, args) -> l
         sliced.exposure,
     )
 
+    if args.power_sweep:
+        sweep_points = [(args.edge_factor, power) for power in args.powers]
+    else:
+        sweep_points = [(factor, FLUX_UNCERTAINTY_POWER) for factor in args.factors]
+
     rows = []
-    for factor in args.factors:
+    for factor, power in sweep_points:
         base_matrix[n_image_rows:] = regularization_block * factor
         parameters = np.full_like(template.array, np.nan)
         for t in range(n_cadences):
@@ -312,7 +326,7 @@ def process_cutout(source_path: Path, epsf_path: Path, out_csv: Path, args) -> l
                     base_matrix,
                     flux_cube[t],
                     badpix,
-                    FLUX_UNCERTAINTY_POWER,
+                    power,
                     regularization_size,
                     flux_mask=fit_masks[t],
                 )
@@ -340,8 +354,14 @@ def process_cutout(source_path: Path, epsf_path: Path, out_csv: Path, args) -> l
                 "camera": sliced.camera,
                 "ccd": sliced.ccd,
                 "exposure": sliced.exposure,
-                "factor": factor,
-                "spoc_equivalent_factor": spoc_equivalent(factor, sliced.exposure),
+                **(
+                    {"power": power, "edge_factor": factor}
+                    if args.power_sweep
+                    else {
+                        "factor": factor,
+                        "spoc_equivalent_factor": spoc_equivalent(factor, sliced.exposure),
+                    }
+                ),
                 "n_cadences": n_cadences,
                 "n_failed_fits": int((~succeeded).sum()),
                 "n_stars": len(positions),
@@ -363,15 +383,15 @@ def process_cutout(source_path: Path, epsf_path: Path, out_csv: Path, args) -> l
             }
         )
 
-    write_rows(out_csv, rows)
+    write_rows(out_csv, rows, fieldnames)
     return rows
 
 
-def write_rows(out_csv: Path, rows: list[dict]) -> None:
+def write_rows(out_csv: Path, rows: list[dict], fieldnames: list[str]) -> None:
     """Write the CSV atomically so an interrupted run never leaves a partial file behind."""
     temporary_path = out_csv.with_suffix(".csv.tmp")
     with temporary_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     os.replace(temporary_path, out_csv)
@@ -392,6 +412,25 @@ def main():
         help="Candidate edge-compression factors in TICA units (electrons per cadence). "
         "Must be identical for every cutout in a campaign.",
     )
+    parser.add_argument(
+        "--power-sweep",
+        action="store_true",
+        help="Sweep the flux-uncertainty weighting power at a fixed edge-compression factor "
+        "(Han & Brandt 2023 Figure 4) instead of sweeping factors at the default power.",
+    )
+    parser.add_argument(
+        "--powers",
+        type=float,
+        nargs="+",
+        default=DEFAULT_POWERS,
+        help="Candidate weighting powers for --power-sweep.",
+    )
+    parser.add_argument(
+        "--edge-factor",
+        type=float,
+        default=RECOMMENDED_EDGE_COMPRESSION,
+        help="Fixed edge-compression factor (TICA units) used during --power-sweep.",
+    )
     parser.add_argument("--cadences", type=int, default=48)
     parser.add_argument("--holdout-fraction", type=float, default=0.1)
     parser.add_argument("--no-holdout", action="store_true")
@@ -402,21 +441,25 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
     args.factors = sorted(set(args.factors))
+    args.powers = sorted(set(args.powers))
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
+    csv_prefix = "power" if args.power_sweep else "sweep"
+    swept = args.powers if args.power_sweep else args.factors
     args.outdir.mkdir(parents=True, exist_ok=True)
     pairs = []
     for epsf_path in sorted(args.epsf_dir.glob("epsf_*_*.fits")):
         x, y = re.match(r"epsf_(\d+)_(\d+)\.fits", epsf_path.name).groups()
         source_path = args.source_dir / f"source_{x}_{y}.fits"
         if source_path.exists():
-            pairs.append((source_path, epsf_path, args.outdir / f"sweep_{x}_{y}.csv"))
+            pairs.append((source_path, epsf_path, args.outdir / f"{csv_prefix}_{x}_{y}.csv"))
     pairs = pairs[args.shard :: args.num_shards]
     if args.limit:
         pairs = pairs[: args.limit]
     logger.info(
-        f"shard {args.shard}/{args.num_shards}: {len(pairs)} cutouts, {len(args.factors)} factors"
+        f"shard {args.shard}/{args.num_shards}: {len(pairs)} cutouts, "
+        f"{len(swept)} {csv_prefix} values"
     )
 
     for source_path, epsf_path, out_csv in pairs:
@@ -431,7 +474,7 @@ def main():
             continue
         finally:
             gc.collect()
-        logger.info(f"{out_csv.name}: {len(rows)} factors in {time.monotonic() - start:.0f}s")
+        logger.info(f"{out_csv.name}: {len(rows)} values in {time.monotonic() - start:.0f}s")
 
 
 if __name__ == "__main__":

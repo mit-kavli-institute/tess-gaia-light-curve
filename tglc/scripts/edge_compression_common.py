@@ -42,6 +42,15 @@ DEFAULT_FACTORS = [
     1e-3,
 ]
 
+# Full-campaign recommendation from the factor sweep (orbits 223+224, 2026-09-15): in-sample
+# knee, holdout-CV optimum, and 3x3 scatter minimum all landed here. Used as the fixed factor
+# when sweeping the flux-uncertainty weighting power instead.
+RECOMMENDED_EDGE_COMPRESSION = 3.16e-7
+
+# Han & Brandt 2023 Figure 4 swept the weighting power l from 0.4 (prioritizing brighter pixels)
+# to 2.0 (prioritizing dimmer pixels) and adopted the MAD minimum at l = 1.4.
+DEFAULT_POWERS = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+
 CSV_FIELDS = [
     "orbit",
     "cutout_x",
@@ -68,6 +77,13 @@ CSV_FIELDS = [
     "flux_fraction_median",
     "model_data_ratio_median",
     "aperture_scatter_mmag_median",
+]
+
+# Power-sweep rows are keyed by the weighting power at a fixed edge-compression factor, so the
+# two factor columns are replaced by "power" and the fixed "edge_factor".
+POWER_CSV_FIELDS = [
+    "power" if field == "factor" else "edge_factor" if field == "spoc_equivalent_factor" else field
+    for field in CSV_FIELDS
 ]
 
 
