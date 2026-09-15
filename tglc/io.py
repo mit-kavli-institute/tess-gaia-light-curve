@@ -30,7 +30,7 @@ from astropy.wcs import WCS, FITSFixedWarning
 import numpy as np
 
 from tglc.epsf import EPSF
-from tglc.utils.constants import get_effective_exposure_time_from_sector
+from tglc.utils.constants import DEFAULT_FILTER_MARGIN, get_effective_exposure_time_from_sector
 
 
 if TYPE_CHECKING:
@@ -149,7 +149,9 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     * MASK -- (size, size) float32 strap weights (``cutout.mask.data``)
     * BADPIX -- (size, size) uint8 bad-pixel mask (``cutout.mask.mask``)
     * CADENCES -- BINTABLE of co-indexed ``time``, ``cadence``, ``quality``
-    * GAIA -- BINTABLE of the gaia catalog
+    * GAIA -- BINTABLE of the gaia catalog (``ra``/``dec`` and the sector
+      pixel columns are propagated to ``PMEPOCH``; the ``*_ref`` columns
+      hold the un-propagated positions at ``PMREFEP``)
     * TIC -- BINTABLE of the TIC <-> Gaia DR3 crossmatch
 
     Parameters
@@ -159,6 +161,9 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
         (``orbit``/``sector``/``camera``/``ccd``/``size``/``ccd_x``/``ccd_y``/
         ``exposure``/``cutout_x``/``cutout_y``/``wcs``/``flux``/``mask``/
         ``time``/``cadence``/``quality``/``gaia``/``tic``) are read from it.
+        When present, ``pm_epoch``/``pm_reference_epoch`` are written as the
+        ``PMEPOCH``/``PMREFEP`` keywords recording the proper-motion
+        propagation epochs of the star positions.
     path : pathlib.Path
         Output FITS file path. The file is written atomically via
         :func:`_atomic_write`.
@@ -176,6 +181,26 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     primary_header["EXPOSURE"] = float(cutout.exposure)
     primary_header["CUTOUTX"] = int(getattr(cutout, "cutout_x", -1))
     primary_header["CUTOUTY"] = int(getattr(cutout, "cutout_y", -1))
+    # Cutouts built before proper-motion propagation (including migrated legacy pickles)
+    # lack the pm epochs; their FITS files are identifiable by the absent keywords.
+    pm_epoch = getattr(cutout, "pm_epoch", None)
+    pm_reference_epoch = getattr(cutout, "pm_reference_epoch", None)
+    if pm_epoch is not None and pm_reference_epoch is not None:
+        primary_header["PMEPOCH"] = (
+            float(pm_epoch),
+            "Julian year star positions propagated to",
+        )
+        primary_header["PMREFEP"] = (
+            float(pm_reference_epoch),
+            "Gaia PM reference epoch (Julian year)",
+        )
+    # Files written before the configurable star-selection margin lack the keyword.
+    filter_margin = getattr(cutout, "filter_margin", None)
+    if filter_margin is not None:
+        primary_header["FILTMARG"] = (
+            float(filter_margin),
+            "Star selection margin around cutout (pixels)",
+        )
     _add_provenance_keywords(primary_header)
 
     primary_hdu = fits.PrimaryHDU(header=primary_header)
@@ -245,7 +270,9 @@ def read_cutout_fits(path: Path) -> FFICutout:
         returned them as plain :class:`Column`. ``EXPOSURE`` values written
         by older versions as int-truncated TICA ``EXPTIME`` (e.g. 158) are
         promoted back to the exact sector-derived effective exposure
-        (e.g. 158.4).
+        (e.g. 158.4). ``pm_epoch``/``pm_reference_epoch`` are ``None`` for
+        files written before star positions were proper-motion propagated;
+        such files carry stale (unpropagated) positions.
 
     Raises
     ------
@@ -287,6 +314,16 @@ def read_cutout_fits(path: Path) -> FFICutout:
     cutout.exposure = _recover_truncated_exposure(float(primary_header["EXPOSURE"]), cutout.sector)
     cutout.cutout_x = int(primary_header.get("CUTOUTX", -1))
     cutout.cutout_y = int(primary_header.get("CUTOUTY", -1))
+    # None identifies files written before proper-motion propagation (stale positions).
+    pm_epoch = primary_header.get("PMEPOCH")
+    cutout.pm_epoch = float(pm_epoch) if pm_epoch is not None else None
+    pm_reference_epoch = primary_header.get("PMREFEP")
+    cutout.pm_reference_epoch = (
+        float(pm_reference_epoch) if pm_reference_epoch is not None else None
+    )
+    # None identifies files written before the configurable star-selection margin.
+    filter_margin = primary_header.get("FILTMARG")
+    cutout.filter_margin = float(filter_margin) if filter_margin is not None else None
     cutout.wcs = wcs
     cutout.flux = flux
     cutout.mask = np.ma.masked_array(mask_data, mask=badpix_data)
@@ -409,15 +446,25 @@ def migrate_cutout_pickle(
     pkl_path: Path,
     fits_path: Path | None = None,
     *,
+    gaia_catalog: Table,
+    tic_catalog: Table,
     cutout_x: int | None = None,
     cutout_y: int | None = None,
+    filter_margin: float = DEFAULT_FILTER_MARGIN,
     delete_original: bool = False,
 ) -> Path:
     """Convert a legacy cutout pickle into a FITS file.
 
-    Reads the pickled cutout, writes the FITS file (atomically), verifies it
-    is readable, and optionally removes the original pickle. The original is
-    only deleted after a successful round-trip read of the new FITS file.
+    Reads the pickled cutout, re-derives its catalog tables from the full-CCD
+    catalogs, writes the FITS file (atomically), verifies it is readable, and
+    optionally removes the original pickle. The original is only deleted after
+    a successful round-trip read of the new FITS file.
+
+    Legacy pickles carry un-propagated catalog tables without the ``*_ref``
+    columns or the proper-motion epochs, so the tables are rebuilt with
+    :meth:`tglc.ffi.FFICutout.derive_catalogs` — the migrated file is
+    equivalent to a freshly generated cutout (including ``PMEPOCH``/
+    ``PMREFEP``) without re-reading the FFIs.
 
     Parameters
     ----------
@@ -428,11 +475,19 @@ def migrate_cutout_pickle(
     fits_path : pathlib.Path, optional
         Output FITS file path. Defaults to ``pkl_path`` with the ``.fits``
         suffix.
+    gaia_catalog, tic_catalog : astropy.table.QTable
+        Full-CCD Gaia and TIC catalogs matching the cutout's camera/CCD, as
+        read from the ECSV catalog files (see
+        :attr:`tglc.utils.manifest.Manifest.gaia_catalog_file`). Not modified.
     cutout_x, cutout_y : int, optional
         Cutout grid indices to set on the unpickled cutout before writing.
         Pickles written before these attributes existed carry no record of
         them, so the FITS header would otherwise get ``CUTOUTX``/``CUTOUTY``
         of -1. Callers can recover the indices from the legacy file name.
+    filter_margin : float, optional
+        Extra star-selection margin in pixels passed to
+        :meth:`tglc.ffi.FFICutout.derive_catalogs`; recorded in the migrated
+        file's ``FILTMARG`` keyword.
     delete_original : bool, optional
         If ``True``, remove ``pkl_path`` after the new FITS file has been
         verified readable. Defaults to ``False`` so the legacy file is
@@ -456,6 +511,9 @@ def migrate_cutout_pickle(
     # Legacy pickles stored int-truncated TICA EXPTIME values; fix before writing so the
     # migrated file carries the exact effective exposure.
     cutout.exposure = _recover_truncated_exposure(float(cutout.exposure), cutout.sector)
+    # Re-deriving a pickle that already carries current-schema tables is idempotent, so
+    # this runs unconditionally.
+    cutout.derive_catalogs(gaia_catalog, tic_catalog, filter_margin=filter_margin)
 
     write_cutout_fits(cutout, fits_path)
     read_cutout_fits(fits_path)

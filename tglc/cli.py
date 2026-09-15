@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from tglc import __version__ as tglc_version
+from tglc.utils.constants import DEFAULT_FILTER_MARGIN
 
 
 # Default value for --tglc-data-dir command line argument
@@ -137,6 +138,13 @@ def parse_tglc_args() -> argparse.Namespace:
         help="Overlap between adjacent cutouts (pixels). Default=2.",
     )
     all_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels), admitting halo stars "
+        f"just outside the cutout whose PSF wings overlap it. Default={DEFAULT_FILTER_MARGIN}.",
+    )
+    all_parser.add_argument(
         "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
     )
     all_parser.add_argument(
@@ -202,6 +210,13 @@ def parse_tglc_args() -> argparse.Namespace:
         default=2,
         help="Overlap between adjacent cutouts (pixels). Default=2.",
     )
+    cutouts_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels), admitting halo stars "
+        f"just outside the cutout whose PSF wings overlap it. Default={DEFAULT_FILTER_MARGIN}.",
+    )
 
     epsfs_parser = tglc_commands.add_parser(
         "epsfs",
@@ -253,6 +268,11 @@ def parse_tglc_args() -> argparse.Namespace:
     migrate_parser = tglc_commands.add_parser(
         "migrate",
         description="TEMPORARY: migrate legacy source pickles and ePSF .npy files to FITS. "
+        "Cutout migration re-derives the Gaia/TIC catalog tables from the per-CCD ECSV "
+        "catalogs, which must be on disk (regenerate with 'tglc catalogs' if needed; no FFI "
+        "reads involved). Existing cutout FITS files missing the PMEPOCH keyword (produced "
+        "by the old naive migration), or whose FILTMARG keyword is absent or differs from "
+        "the requested --filter-margin, are re-migrated automatically without --replace. "
         "For this command, -n/--nprocs is the number of threads used.",
         help="Migrate legacy .pkl/.npy data products to FITS (temporary)",
         parents=[command_base_parser],
@@ -265,6 +285,13 @@ def parse_tglc_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+    )
+    migrate_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels) used when re-deriving "
+        f"the catalogs; recorded in the FILTMARG keyword. Default={DEFAULT_FILTER_MARGIN}.",
     )
     migrate_parser.add_argument(
         "--delete-original",
