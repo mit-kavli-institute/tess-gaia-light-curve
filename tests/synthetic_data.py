@@ -7,7 +7,7 @@ import numpy as np
 
 from tglc.epsf import EPSF_BACKGROUND_COLUMNS
 from tglc.ffi import FFICutout
-from tglc.proper_motion import propagate_gaia_catalog
+from tglc.utils.proper_motion import propagate_gaia_catalog
 
 
 def make_synthetic_wcs() -> WCS:

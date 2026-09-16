@@ -1,4 +1,4 @@
-"""Tests for :mod:`tglc.proper_motion`: en-masse Gaia proper-motion propagation."""
+"""Tests for :mod:`tglc.utils.proper_motion`: en-masse Gaia proper-motion propagation."""
 
 import warnings
 
@@ -12,7 +12,8 @@ from hypothesis.extra import numpy as npst
 import numpy as np
 import pytest
 
-from tglc.proper_motion import (
+from tglc.utils.constants import get_orbit_midtime
+from tglc.utils.proper_motion import (
     _MAS_YR_TO_RAD,
     catalog_is_propagated,
     load_propagated_gaia_catalog,
@@ -21,7 +22,6 @@ from tglc.proper_motion import (
     propagate_gaia_catalog_for_orbit,
     write_gaia_catalog_ecsv,
 )
-from tglc.utils.constants import get_orbit_midtime
 
 
 def _oracle_propagate(ra, dec, pmra, pmdec, epoch_jyear, reference_epoch_jyear) -> SkyCoord:

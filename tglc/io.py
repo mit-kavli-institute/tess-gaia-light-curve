@@ -480,7 +480,7 @@ def migrate_cutout_pickle(
         read from the ECSV catalog files (see
         :attr:`tglc.utils.manifest.Manifest.gaia_catalog_file`). The Gaia
         catalog must be proper-motion propagated (load it with
-        :func:`tglc.proper_motion.load_propagated_gaia_catalog`, which
+        :func:`tglc.utils.proper_motion.load_propagated_gaia_catalog`, which
         upgrades old-format files). Not modified.
     cutout_x, cutout_y : int, optional
         Cutout grid indices to set on the unpickled cutout before writing.

@@ -17,10 +17,10 @@ import sqlalchemy as sa
 import tesswcs
 
 from tglc.databases import TIC, Gaia
-from tglc.proper_motion import propagate_gaia_catalog_for_orbit, write_gaia_catalog_ecsv
 from tglc.utils.constants import TESS_CCD_SHAPE, get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
+from tglc.utils.proper_motion import propagate_gaia_catalog_for_orbit, write_gaia_catalog_ecsv
 
 
 logger = getLogger(__name__)

@@ -31,10 +31,10 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.io import migrate_cutout_pickle, migrate_epsf_npy
-from tglc.proper_motion import load_propagated_gaia_catalog
 from tglc.utils.constants import get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import pool_map_if_multiprocessing
+from tglc.utils.proper_motion import load_propagated_gaia_catalog
 
 
 logger = logging.getLogger(__name__)

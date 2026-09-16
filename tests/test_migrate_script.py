@@ -10,10 +10,10 @@ from astropy.table import QTable
 import numpy as np
 
 from tglc.io import read_cutout_fits, write_cutout_fits
-from tglc.proper_motion import catalog_is_propagated
 from tglc.scripts.migrate import _load_catalogs, migrate_main
 from tglc.utils.constants import DEFAULT_FILTER_MARGIN, get_orbit_midtime
 from tglc.utils.manifest import Manifest
+from tglc.utils.proper_motion import catalog_is_propagated
 
 from .synthetic_data import (
     make_legacy_synthetic_cutout,

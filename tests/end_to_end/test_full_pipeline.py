@@ -15,7 +15,7 @@ import pytest
 
 from tglc.__main__ import tglc_main
 from tglc.io import read_cutout_fits, read_epsf_fits
-from tglc.proper_motion import catalog_is_propagated
+from tglc.utils.proper_motion import catalog_is_propagated
 
 from ..sample_data import SAMPLE_DATA_DIRECTORY
 

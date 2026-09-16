@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 
 from tglc.ffi import FFICutout, ffi
-from tglc.proper_motion import propagate_gaia_catalog
 from tglc.utils.constants import DEFAULT_FILTER_MARGIN
+from tglc.utils.proper_motion import propagate_gaia_catalog
 
 from .synthetic_data import (
     make_constructed_cutout,

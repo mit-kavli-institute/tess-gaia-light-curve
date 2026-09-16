@@ -18,7 +18,6 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.io import write_cutout_fits
-from tglc.proper_motion import load_propagated_gaia_catalog
 from tglc.utils import data
 from tglc.utils.constants import (
     DEFAULT_FILTER_MARGIN,
@@ -27,6 +26,7 @@ from tglc.utils.constants import (
 )
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
+from tglc.utils.proper_motion import load_propagated_gaia_catalog
 
 
 logger = logging.getLogger(__name__)
@@ -187,7 +187,7 @@ class FFICutout:
 
         The Gaia catalog must already be proper-motion propagated (as written
         by ``tglc catalogs`` or upgraded by
-        `tglc.proper_motion.load_propagated_gaia_catalog`): its ``ra``/``dec``
+        `tglc.utils.proper_motion.load_propagated_gaia_catalog`): its ``ra``/``dec``
         columns hold positions at the observation epoch recorded in the table
         meta, and ``ra_ref``/``dec_ref`` hold the un-propagated catalog
         positions. The epochs are copied from the catalog meta to the
