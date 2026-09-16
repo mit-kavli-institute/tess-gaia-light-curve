@@ -181,6 +181,11 @@ def test_cutout_fits_roundtrip_preserves_pm_epoch_and_positions(tmp_path: Path):
     assert header["PMEPOCH"] == pytest.approx(cutout.pm_epoch)
     assert header["PMREFEP"] == pytest.approx(cutout.pm_reference_epoch)
     assert header["FILTMARG"] == cutout.filter_margin
+    # The propagated catalog's table meta must not leak into the GAIA BINTABLE header
+    # (the epochs live in the primary header keywords above).
+    gaia_header = fits.getheader(fits_path, extname="GAIA")
+    for keyword in ("pm_epoch", "pm_reference_epoch", "pm_orbit"):
+        assert keyword not in gaia_header
 
     loaded = read_cutout_fits(fits_path)
     assert loaded.pm_epoch == pytest.approx(cutout.pm_epoch)

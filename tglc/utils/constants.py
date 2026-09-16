@@ -120,6 +120,29 @@ def get_orbits_in_sector(sector: int) -> list[int]:
         raise ValueError(f"Orbits not known for sector {sector}")
 
 
+def get_orbit_midtime(orbit: int) -> Time:
+    """
+    Get the approximate mid-time of a TESS orbit from the `tesswcs` sector pointings table.
+
+    The sector's ``Start``/``End`` span is divided evenly among its orbits, so the mid-time
+    of orbit ``i`` of ``n`` is at fraction ``(i + 0.5) / n`` of the sector (0.25/0.75 for
+    ordinary 2-orbit sectors). This is accurate to ~days, which is sufficient for uses like
+    proper-motion epochs where a day corresponds to <0.001 px even at 1"/yr.
+    """
+    # Imported locally so importing this module doesn't pay for tesswcs's data tables.
+    import tesswcs
+
+    sector = get_sector_containing_orbit(orbit)
+    pointings = tesswcs.pointings[tesswcs.pointings["Sector"] == sector]
+    if len(pointings) == 0:
+        raise ValueError(f"tesswcs has no pointing for sector {sector} (orbit {orbit})")
+    start = float(pointings["Start"][0])
+    end = float(pointings["End"][0])
+    orbits = get_orbits_in_sector(sector)
+    fraction = (orbits.index(orbit) + 0.5) / len(orbits)
+    return Time(start + fraction * (end - start), format="jd", scale="tdb")
+
+
 def convert_gaia_mags_to_tmag(
     G: npt.ArrayLike, Gbp: npt.ArrayLike, Grp: npt.ArrayLike
 ) -> np.ma.MaskedArray:

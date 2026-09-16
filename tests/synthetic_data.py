@@ -7,6 +7,7 @@ import numpy as np
 
 from tglc.epsf import EPSF_BACKGROUND_COLUMNS
 from tglc.ffi import FFICutout
+from tglc.proper_motion import propagate_gaia_catalog
 
 
 def make_synthetic_wcs() -> WCS:
@@ -18,8 +19,16 @@ def make_synthetic_wcs() -> WCS:
     return wcs
 
 
-def make_synthetic_gaia_catalog(*, ra, dec, pmra, pmdec, g_mag=None) -> QTable:
+def make_synthetic_gaia_catalog(
+    *, ra, dec, pmra, pmdec, g_mag=None, propagate: bool = True, epoch_jyear: float = 2026.0
+) -> QTable:
     """Build a Gaia catalog QTable shaped like the ECSV catalogs `FFICutout.__init__` reads.
+
+    ``ra``/``dec`` are reference-epoch (J2016.0) positions; by default the catalog is
+    proper-motion propagated to ``epoch_jyear`` like the catalogs `tglc catalogs` writes
+    (2026.0 matches `make_constructed_cutout`'s median cadence epoch, exactly 10 years
+    after J2016.0). Pass ``propagate=False`` for an old-format catalog without propagated
+    positions.
 
     ``pmra``/``pmdec`` may be plain sequences (fully-populated columns, the F11 crash
     case), ``MaskedColumn``s, or NaN-bearing arrays to exercise missing proper motions.
@@ -47,6 +56,8 @@ def make_synthetic_gaia_catalog(*, ra, dec, pmra, pmdec, g_mag=None) -> QTable:
             )
         else:
             catalog[name] = np.asarray(values, dtype=np.float64) * (u.mas / u.yr)
+    if propagate:
+        propagate_gaia_catalog(catalog, epoch_jyear)
     return catalog
 
 
@@ -180,7 +191,7 @@ def make_synthetic_cutout(
 
 
 def make_synthetic_ccd_catalogs(
-    *, ccd_x: int = 44, ccd_y: int = 0, size: int = 12, n_stars: int = 3
+    *, ccd_x: int = 44, ccd_y: int = 0, size: int = 12, n_stars: int = 3, propagate: bool = True
 ) -> tuple[QTable, QTable]:
     """ECSV-shaped Gaia/TIC catalogs whose stars land inside a cutout window.
 
@@ -200,6 +211,7 @@ def make_synthetic_ccd_catalogs(
         pmra=pm,
         pmdec=-pm,
         g_mag=np.linspace(10.0, 12.0, n_stars),
+        propagate=propagate,
     )
     tic = make_synthetic_tic_catalog(ra=coordinates.ra.deg, dec=coordinates.dec.deg)
     return gaia, tic

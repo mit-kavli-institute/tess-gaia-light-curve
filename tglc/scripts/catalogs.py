@@ -10,12 +10,14 @@ from logging import getLogger
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 import astropy.units as u
+import numba
 import numpy as np
 import pandas as pd
 import sqlalchemy as sa
 import tesswcs
 
 from tglc.databases import TIC, Gaia
+from tglc.proper_motion import propagate_gaia_catalog_for_orbit, write_gaia_catalog_ecsv
 from tglc.utils.constants import TESS_CCD_SHAPE, get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
@@ -268,13 +270,11 @@ def make_tic_and_gaia_catalogs(
         logger.debug(f"Skipping Gaia catalog creation for camera {camera} CCD {ccd}")
     elif replace or not manifest.gaia_catalog_file.is_file():
         gaia_results = get_gaia_catalog_data(orbit, camera, ccd, nprocs=nprocs)
-        # Astropy's fast ascii writer doesn't work with ecsv by default, but we can write the
-        # header and then write the data to get an equivalent file.
-        gaia_results[:0].write(manifest.gaia_catalog_file, overwrite=replace)
-        with open(manifest.gaia_catalog_file, "a") as gaia_output:
-            gaia_results.write(
-                gaia_output, format="ascii.fast_no_header", delimiter=" ", strip_whitespace=False
-            )
+        # Positions are propagated to the orbit mid-time here, once for the whole CCD, so
+        # downstream cutout code never has to apply proper motions itself.
+        numba.set_num_threads(min(max(nprocs, 1), numba.config.NUMBA_NUM_THREADS))
+        propagate_gaia_catalog_for_orbit(gaia_results, orbit)
+        write_gaia_catalog_ecsv(gaia_results, manifest.gaia_catalog_file)
     else:
         logger.info(
             f"Gaia catalog at {manifest.gaia_catalog_file} already exists and will not be overwritten"

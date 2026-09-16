@@ -6,14 +6,10 @@ import logging
 from pathlib import Path
 import warnings
 
-from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Column, MaskedColumn, QTable, Table, hstack
-from astropy.time import Time
-import astropy.units as u
 from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS
-from erfa.core import ErfaWarning
 import numba
 from numba import float32, jit, prange
 import numpy as np
@@ -22,6 +18,7 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.io import write_cutout_fits
+from tglc.proper_motion import load_propagated_gaia_catalog
 from tglc.utils import data
 from tglc.utils.constants import (
     DEFAULT_FILTER_MARGIN,
@@ -188,32 +185,33 @@ class FFICutout:
         """
         Derive the ``gaia`` and ``tic`` catalog tables from full-CCD catalogs.
 
-        Gaia star positions are propagated from the catalog reference epoch
-        (J2016.0 for Gaia DR3, or the catalog's ``ref_epoch`` column when
-        present) to the median cadence epoch of the cutout using the catalog
-        proper motions, before spatial selection and WCS conversion. The
-        epochs used are recorded in the ``pm_epoch`` and
-        ``pm_reference_epoch`` attributes (Julian years). The ``gaia`` table
-        records positions at both epochs: ``ra``/``dec`` and
+        The Gaia catalog must already be proper-motion propagated (as written
+        by ``tglc catalogs`` or upgraded by
+        `tglc.proper_motion.load_propagated_gaia_catalog`): its ``ra``/``dec``
+        columns hold positions at the observation epoch recorded in the table
+        meta, and ``ra_ref``/``dec_ref`` hold the un-propagated catalog
+        positions. The epochs are copied from the catalog meta to the
+        ``pm_epoch`` and ``pm_reference_epoch`` attributes (Julian years). The
+        ``gaia`` table records positions at both epochs: ``ra``/``dec`` and
         ``sector_{sector}_x``/``sector_{sector}_y`` hold the propagated
         (``pm_epoch``) values, while ``ra_ref``/``dec_ref`` and
         ``sector_{sector}_x_ref``/``sector_{sector}_y_ref`` hold the
         un-propagated catalog positions at ``pm_reference_epoch``.
 
-        Reads only ``wcs``, ``time`` (median), ``ccd_x``/``ccd_y``, ``size``,
-        and ``sector`` from the cutout — never ``flux``/``mask`` — so it is
-        safe to call on an unpickled legacy cutout whose image arrays are
-        already sliced (e.g. during ``tglc migrate``). The input catalogs are
-        not modified.
+        Reads only ``wcs``, ``ccd_x``/``ccd_y``, ``size``, and ``sector``
+        from the cutout — never ``flux``/``mask`` — so it is safe to call on
+        an unpickled legacy cutout whose image arrays are already sliced
+        (e.g. during ``tglc migrate``). The input catalogs are not modified.
 
         Parameters
         ----------
         gaia_catalog : astropy.table.QTable
-            Gaia catalog rows covering the CCD, with the ECSV catalog schema
-            (``designation``, ``ra``, ``dec``, ``pmra``, ``pmdec``,
-            ``phot_g/bp/rp_mean_mag``). Filtered to rows whose
-            proper-motion-propagated position falls inside the cutout window
-            (padded by ``filter_margin``).
+            Proper-motion-propagated Gaia catalog rows covering the CCD, with
+            the ECSV catalog schema (``designation``, ``ra``, ``dec``,
+            ``ra_ref``, ``dec_ref``, ``pmra``, ``pmdec``,
+            ``phot_g/bp/rp_mean_mag`` and ``pm_epoch``/``pm_reference_epoch``
+            meta). Filtered to rows whose propagated position falls inside the
+            cutout window (padded by ``filter_margin``).
         tic_catalog : astropy.table.QTable
             TESS Input Catalog rows covering the CCD (``id``, ``gaia3``,
             ``ra``, ``dec``, ...). Filtered to rows whose catalog position
@@ -227,58 +225,41 @@ class FFICutout:
         """
         self.filter_margin = float(filter_margin)
 
-        # Star positions are propagated from the catalog reference epoch to the median
-        # cadence epoch of this cutout, before spatial selection and WCS conversion.
-        observation_epoch = Time(np.median(self.time), format="tjd", scale="tdb")
-        if "ref_epoch" in gaia_catalog.colnames:
-            reference_epoch = Time(
-                np.median(np.asarray(gaia_catalog["ref_epoch"], dtype=np.float64)),
-                format="jyear",
-                scale="tdb",
+        # Star positions were propagated to the observation epoch when the catalog was
+        # generated (`tglc catalogs`); both load sites upgrade old-format catalog files
+        # transparently, so this only triggers for callers that bypass them.
+        if not (
+            "ra_ref" in gaia_catalog.colnames
+            and "pm_epoch" in gaia_catalog.meta
+            and "pm_reference_epoch" in gaia_catalog.meta
+        ):
+            raise ValueError(
+                "Gaia catalog is not proper-motion propagated (old-format ECSV?). Catalog files"
+                " are upgraded automatically when loaded by 'tglc cutouts'/'tglc migrate', or can"
+                " be regenerated with 'tglc catalogs --replace'."
             )
-        else:
-            # Gaia DR3 positions are referred to J2016.0.
-            reference_epoch = Time(2016.0, format="jyear", scale="tdb")
-        self.pm_epoch = float(observation_epoch.jyear)
-        self.pm_reference_epoch = float(reference_epoch.jyear)
+        self.pm_epoch = float(gaia_catalog.meta["pm_epoch"])
+        self.pm_reference_epoch = float(gaia_catalog.meta["pm_reference_epoch"])
 
-        # Load catalog files and find relevant stars
+        # Find relevant stars. `wcs.all_world2pix` on raw ICRS degree arrays is equivalent to
+        # `wcs.world_to_pixel` on a SkyCoord (SIP included) without building a full-catalog
+        # SkyCoord for every cutout.
         if len(gaia_catalog) > 0:
-            # Gaia pmra is already mu_alpha* = mu_alpha * cos(dec). Stars without finite
-            # proper motions stay at their catalog positions.
-            pmra = np.asarray(gaia_catalog["pmra"], dtype=np.float64)
-            pmdec = np.asarray(gaia_catalog["pmdec"], dtype=np.float64)
-            pm_missing = (
-                np.ma.getmaskarray(gaia_catalog["pmra"])
-                | np.ma.getmaskarray(gaia_catalog["pmdec"])
-                | ~np.isfinite(pmra)
-                | ~np.isfinite(pmdec)
+            gaia_x, gaia_y = self.wcs.all_world2pix(
+                np.asarray(gaia_catalog["ra"], dtype=np.float64),
+                np.asarray(gaia_catalog["dec"], dtype=np.float64),
+                0,
             )
-            gaia_sky_coordinates = SkyCoord(
-                ra=gaia_catalog["ra"],
-                dec=gaia_catalog["dec"],
-                pm_ra_cosdec=np.where(pm_missing, 0.0, pmra) * u.mas / u.yr,
-                pm_dec=np.where(pm_missing, 0.0, pmdec) * u.mas / u.yr,
-                obstime=reference_epoch,
+            gaia_x_ref, gaia_y_ref = self.wcs.all_world2pix(
+                np.asarray(gaia_catalog["ra_ref"], dtype=np.float64),
+                np.asarray(gaia_catalog["dec_ref"], dtype=np.float64),
+                0,
             )
-            with warnings.catch_warnings():
-                # ERFA warns that propagating without distance/RV overrides the distance;
-                # proper-motion-only propagation is intended here.
-                warnings.simplefilter("ignore", ErfaWarning)
-                propagated_coordinates = gaia_sky_coordinates.apply_space_motion(
-                    new_obstime=observation_epoch
-                )
-                gaia_x, gaia_y = self.wcs.world_to_pixel(propagated_coordinates)
-                gaia_x_ref, gaia_y_ref = self.wcs.world_to_pixel(gaia_sky_coordinates)
-            propagated_ra = np.asarray(propagated_coordinates.ra.deg, dtype=np.float64)
-            propagated_dec = np.asarray(propagated_coordinates.dec.deg, dtype=np.float64)
         else:
             gaia_x = np.zeros(0)
             gaia_y = np.zeros(0)
             gaia_x_ref = np.zeros(0)
             gaia_y_ref = np.zeros(0)
-            propagated_ra = np.zeros(0)
-            propagated_dec = np.zeros(0)
         gaia_x_in_source = (self.ccd_x - filter_margin <= gaia_x) & (
             gaia_x <= self.ccd_x + self.size + filter_margin
         )
@@ -287,6 +268,9 @@ class FFICutout:
         )
         gaia_in_source = gaia_x_in_source & gaia_y_in_source
         catalogdata = gaia_catalog[gaia_in_source]
+        # Slices inherit the full-CCD catalog's meta (pm epochs etc.); clear it so those keys
+        # don't leak into the GAIA BINTABLE header of every cutout FITS file.
+        catalogdata.meta.clear()
         x_gaia = gaia_x[gaia_in_source] - self.ccd_x
         y_gaia = gaia_y[gaia_in_source] - self.ccd_y
         x_gaia_ref = gaia_x_ref[gaia_in_source] - self.ccd_x
@@ -294,10 +278,11 @@ class FFICutout:
 
         # TIC rows only feed the TIC <-> Gaia ID crossmatch, so their positions are not
         # proper-motion propagated (TIC positions are referred to J2000, not J2016).
-        tic_sky_coordinates = SkyCoord(tic_catalog["ra"], tic_catalog["dec"])
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", ErfaWarning)
-            tic_x, tic_y = self.wcs.world_to_pixel(tic_sky_coordinates)
+        tic_x, tic_y = self.wcs.all_world2pix(
+            np.asarray(tic_catalog["ra"], dtype=np.float64),
+            np.asarray(tic_catalog["dec"], dtype=np.float64),
+            0,
+        )
         tic_x_in_source = (self.ccd_x <= tic_x) & (tic_x <= self.ccd_x + self.size)
         tic_y_in_source = (self.ccd_y <= tic_y) & (tic_y <= self.ccd_y + self.size)
         tic_in_source = tic_x_in_source & tic_y_in_source
@@ -323,20 +308,6 @@ class FFICutout:
             values = np.asarray(catalogdata[name], dtype=np.float64)
             col_mask = np.ma.getmaskarray(catalogdata[name]) | ~np.isfinite(values)
             catalogdata[name] = MaskedColumn(np.where(col_mask, np.nan, values), mask=col_mask)
-
-        # ra/dec keep their usual names but hold positions at pm_epoch, so downstream
-        # consumers stay epoch-consistent with the pixel positions; the un-propagated
-        # catalog positions at pm_reference_epoch move to the *_ref columns.
-        ra_ref = np.asarray(catalogdata["ra"], dtype=np.float64)
-        dec_ref = np.asarray(catalogdata["dec"], dtype=np.float64)
-        catalogdata["ra"] = Column(propagated_ra[gaia_in_source])
-        catalogdata["dec"] = Column(propagated_dec[gaia_in_source])
-        catalogdata.add_column(
-            Column(ra_ref), name="ra_ref", index=catalogdata.colnames.index("dec") + 1
-        )
-        catalogdata.add_column(
-            Column(dec_ref), name="dec_ref", index=catalogdata.colnames.index("ra_ref") + 1
-        )
 
         tess_mag = np.ma.filled(
             np.ma.masked_invalid(
@@ -658,7 +629,9 @@ def ffi(
             wcs = WCS(hdulist[0].header)
             exposure = float(hdulist[0].header["EXPTIME"])
 
-    gaia_catalog = QTable.read(manifest.gaia_catalog_file)
+    # Old-format catalog files (without propagated positions) are upgraded and rewritten here,
+    # once per CCD, before any cutout work.
+    gaia_catalog = load_propagated_gaia_catalog(manifest.gaia_catalog_file, orbit)
     tic_catalog = QTable.read(manifest.tic_catalog_file)
 
     logger.info(f"Writing cutout FITS files to {manifest.source_directory.resolve()}")

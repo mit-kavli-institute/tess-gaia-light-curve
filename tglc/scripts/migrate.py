@@ -4,10 +4,12 @@ TEMPORARY script migrating legacy data products to the FITS format (issue #1).
 Converts source cutout pickles (``source_{x}_{y}.pkl``) and ePSF numpy files
 (``epsf_{x}_{y}.npy``) to the FITS formats written by `tglc.io`. Cutout
 migration re-derives the Gaia/TIC catalog tables from the per-CCD ECSV
-catalogs (proper-motion propagation, the ``*_ref`` columns, and the
-``PMEPOCH``/``PMREFEP`` epochs), so those catalog files must be on disk;
-regenerate them with ``tglc catalogs`` if needed (database queries only, no
-FFI reads). Cutout FITS files produced by earlier versions of this script
+catalogs (the ``*_ref`` columns and the ``PMEPOCH``/``PMREFEP`` epochs), so
+those catalog files must be on disk; regenerate them with ``tglc catalogs``
+if needed (database queries only, no FFI reads). Old-format Gaia catalog
+files without proper-motion-propagated positions are upgraded (and rewritten
+on disk) once per CCD when loaded. Cutout FITS files produced by earlier
+versions of this script
 carry stale catalogs — they are detected by their missing ``PMEPOCH`` keyword,
 or a ``FILTMARG`` keyword absent or different from the requested
 ``--filter-margin``, and re-migrated automatically without requiring
@@ -29,6 +31,7 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tglc.io import migrate_cutout_pickle, migrate_epsf_npy
+from tglc.proper_motion import load_propagated_gaia_catalog
 from tglc.utils.constants import get_sector_containing_orbit
 from tglc.utils.manifest import Manifest
 from tglc.utils.mapping import pool_map_if_multiprocessing
@@ -123,12 +126,22 @@ def _discover_work(args: argparse.Namespace) -> dict[tuple[int, int], list[_Work
 _catalog_cache: dict[tuple[Path, Path], tuple[QTable, QTable]] = {}
 
 
-def _get_catalogs(gaia_catalog_file: Path, tic_catalog_file: Path) -> tuple[QTable, QTable]:
-    """Read the full-CCD Gaia/TIC ECSV catalogs, reusing (and refilling) `_catalog_cache`."""
+def _get_catalogs(
+    gaia_catalog_file: Path, tic_catalog_file: Path, orbit: int
+) -> tuple[QTable, QTable]:
+    """Read the full-CCD Gaia/TIC ECSV catalogs, reusing (and refilling) `_catalog_cache`.
+
+    Old-format Gaia catalog files are upgraded to proper-motion-propagated form (and
+    rewritten on disk). The parent-process cache warm does this once per CCD before the
+    worker pool exists; spawned workers then re-read the already-rewritten file.
+    """
     key = (gaia_catalog_file, tic_catalog_file)
     if key not in _catalog_cache:
         _catalog_cache.clear()
-        _catalog_cache[key] = (QTable.read(gaia_catalog_file), QTable.read(tic_catalog_file))
+        _catalog_cache[key] = (
+            load_propagated_gaia_catalog(gaia_catalog_file, orbit),
+            QTable.read(tic_catalog_file),
+        )
     return _catalog_cache[key]
 
 
@@ -145,7 +158,7 @@ def _load_catalogs(manifest: Manifest, camera: int, ccd: int) -> tuple[Path, Pat
         )
         return None
     catalog_files = (manifest.gaia_catalog_file, manifest.tic_catalog_file)
-    _get_catalogs(*catalog_files)
+    _get_catalogs(*catalog_files, manifest.orbit)
     return catalog_files
 
 
@@ -167,7 +180,7 @@ def _migrate_item(
     """
     try:
         if item.kind == "source":
-            gaia_catalog, tic_catalog = _get_catalogs(*catalog_files)
+            gaia_catalog, tic_catalog = _get_catalogs(*catalog_files, orbit)
             # Legacy pickles predate the cutout_x/cutout_y attributes, so supply
             # them from the file name.
             migrate_cutout_pickle(
@@ -218,8 +231,9 @@ def migrate_main(args: argparse.Namespace):
             # Full-CCD catalogs can be large, so they are loaded once per CCD (only when
             # the CCD has cutout pickles) and released before the next CCD. Loading them
             # here, before the per-CCD pool is created, lets forked workers inherit the
-            # tables copy-on-write (see _catalog_cache); derive_catalogs never mutates
-            # its inputs.
+            # tables copy-on-write (see _catalog_cache) and performs any old-format
+            # catalog upgrade exactly once per CCD; derive_catalogs never mutates its
+            # inputs.
             catalog_files = None
             if any(item.kind == "source" for item in items):
                 catalog_files = _load_catalogs(manifest, camera, ccd)
@@ -230,8 +244,8 @@ def migrate_main(args: argparse.Namespace):
                     items = [item for item in items if item.kind != "source"]
             if not items:
                 continue
-            # Worker processes rather than threads: the proper-motion propagation in
-            # derive_catalogs is CPU-bound and holds the GIL.
+            # Worker processes rather than threads: derive_catalogs' full-catalog
+            # pixel-coordinate computation is CPU-bound and holds the GIL.
             migrate = partial(
                 _migrate_item,
                 catalog_files=catalog_files,

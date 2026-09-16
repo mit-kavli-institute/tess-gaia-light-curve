@@ -478,7 +478,10 @@ def migrate_cutout_pickle(
     gaia_catalog, tic_catalog : astropy.table.QTable
         Full-CCD Gaia and TIC catalogs matching the cutout's camera/CCD, as
         read from the ECSV catalog files (see
-        :attr:`tglc.utils.manifest.Manifest.gaia_catalog_file`). Not modified.
+        :attr:`tglc.utils.manifest.Manifest.gaia_catalog_file`). The Gaia
+        catalog must be proper-motion propagated (load it with
+        :func:`tglc.proper_motion.load_propagated_gaia_catalog`, which
+        upgrades old-format files). Not modified.
     cutout_x, cutout_y : int, optional
         Cutout grid indices to set on the unpickled cutout before writing.
         Pickles written before these attributes existed carry no record of
