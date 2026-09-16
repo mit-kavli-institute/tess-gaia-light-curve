@@ -15,6 +15,7 @@ import pytest
 
 from tglc.__main__ import tglc_main
 from tglc.io import read_cutout_fits, read_epsf_fits
+from tglc.utils.proper_motion import catalog_is_propagated
 
 from ..sample_data import SAMPLE_DATA_DIRECTORY
 
@@ -95,6 +96,10 @@ def test_catalogs(
     for file in catalog_files:
         catalog = QTable.read(file)
         assert len(catalog) > 0
+    # The Gaia catalog is written proper-motion propagated, with the epochs in its meta.
+    gaia_catalog = QTable.read(catalogs_directory / "Gaia_cam1_ccd1.ecsv")
+    assert catalog_is_propagated(gaia_catalog)
+    assert gaia_catalog.meta["pm_orbit"] == TEST_ORBIT
 
 
 def test_full_pipeline_with_commands(
@@ -238,6 +243,7 @@ def test_full_pipeline_with_all(
     for file in catalog_files:
         catalog = QTable.read(file)
         assert len(catalog) > 0
+    assert catalog_is_propagated(QTable.read(catalogs_directory / "Gaia_cam1_ccd1.ecsv"))
 
     ccd_directory = tmp_orbit_directory / "cam1" / "ccd1"
 
@@ -317,6 +323,18 @@ def test_full_pipeline_after_migration(
     source_fits.unlink()
     epsf_fits.unlink()
 
+    # Downgrade the Gaia ECSV to the old (un-propagated) format so migrate also exercises
+    # the on-disk catalog upgrade path. The upgrade recomputes the same epoch (the orbit
+    # mid-time) from the same reference positions, so the equivalence oracle still holds.
+    gaia_catalog_file = tmp_orbit_directory / "catalogs" / "Gaia_cam1_ccd1.ecsv"
+    old_format = QTable.read(gaia_catalog_file)
+    old_format["ra"] = old_format["ra_ref"]
+    old_format["dec"] = old_format["dec_ref"]
+    old_format.remove_columns(["ra_ref", "dec_ref"])
+    old_format.meta.clear()
+    old_format.write(gaia_catalog_file, format="ascii.ecsv", overwrite=True)
+    assert not catalog_is_propagated(QTable.read(gaia_catalog_file))
+
     # Migrate forward with the real CLI, exercising work discovery, per-CCD catalog
     # loading (the ECSVs written by the `catalogs` step above), and re-derivation.
     with monkeypatch.context() as m:
@@ -342,6 +360,9 @@ def test_full_pipeline_after_migration(
         tglc_main()
     assert not source_pkl.exists()
     assert not epsf_npy.exists()
+
+    # The old-format Gaia ECSV was upgraded and rewritten on disk.
+    assert catalog_is_propagated(QTable.read(gaia_catalog_file))
 
     # The re-derived catalogs match the pre-downgrade cutout.
     migrated = read_cutout_fits(source_fits)

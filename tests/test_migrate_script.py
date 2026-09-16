@@ -6,12 +6,14 @@ from pathlib import Path
 import pickle
 
 from astropy.io import fits
+from astropy.table import QTable
 import numpy as np
 
 from tglc.io import read_cutout_fits, write_cutout_fits
 from tglc.scripts.migrate import _load_catalogs, migrate_main
-from tglc.utils.constants import DEFAULT_FILTER_MARGIN
+from tglc.utils.constants import DEFAULT_FILTER_MARGIN, get_orbit_midtime
 from tglc.utils.manifest import Manifest
+from tglc.utils.proper_motion import catalog_is_propagated
 
 from .synthetic_data import (
     make_legacy_synthetic_cutout,
@@ -23,7 +25,9 @@ from .synthetic_data import (
 ORBIT = 185  # make_synthetic_cutout's orbit; contained in sector 89
 
 
-def _make_migration_tree(tmp_path: Path, *, with_catalogs: bool = True) -> tuple[Path, Path]:
+def _make_migration_tree(
+    tmp_path: Path, *, with_catalogs: bool = True, propagated_catalogs: bool = True
+) -> tuple[Path, Path]:
     """Build a Manifest-shaped orbit directory with one legacy pickle and one ePSF .npy."""
     ffi_directory = tmp_path / f"orbit-{ORBIT}" / "ffi"
     catalog_directory = ffi_directory / "catalogs"
@@ -33,7 +37,7 @@ def _make_migration_tree(tmp_path: Path, *, with_catalogs: bool = True) -> tuple
         directory.mkdir(parents=True)
 
     if with_catalogs:
-        gaia_catalog, tic_catalog = make_synthetic_ccd_catalogs()
+        gaia_catalog, tic_catalog = make_synthetic_ccd_catalogs(propagate=propagated_catalogs)
         gaia_catalog.write(catalog_directory / "Gaia_cam1_ccd1.ecsv", format="ascii.ecsv")
         tic_catalog.write(catalog_directory / "TIC_cam1_ccd1.ecsv", format="ascii.ecsv")
 
@@ -92,6 +96,24 @@ def test_migrate_main_multiprocessing(tmp_path: Path):
     assert source_fits.is_file()
     assert npy_path.with_suffix(".fits").is_file()
     assert fits.getheader(source_fits)["PMEPOCH"] is not None
+
+
+def test_migrate_main_upgrades_old_format_gaia_catalog(tmp_path: Path):
+    """An old-format Gaia ECSV is propagated once per CCD and rewritten on disk."""
+    pkl_path, _ = _make_migration_tree(tmp_path, propagated_catalogs=False)
+    gaia_catalog_file = tmp_path / f"orbit-{ORBIT}" / "ffi" / "catalogs" / "Gaia_cam1_ccd1.ecsv"
+    assert not catalog_is_propagated(QTable.read(gaia_catalog_file))
+
+    migrate_main(_migrate_args(tmp_path))
+
+    # The catalog file is rewritten in the propagated format with the orbit mid-time epoch.
+    upgraded = QTable.read(gaia_catalog_file)
+    assert catalog_is_propagated(upgraded)
+    assert upgraded.meta["pm_orbit"] == ORBIT
+    assert upgraded.meta["pm_epoch"] == float(get_orbit_midtime(ORBIT).jyear)
+    # The migrated cutout carries the catalog's epoch.
+    source_fits = pkl_path.with_suffix(".fits")
+    assert fits.getheader(source_fits)["PMEPOCH"] == float(get_orbit_midtime(ORBIT).jyear)
 
 
 def test_migrate_main_missing_catalogs_skips_cutouts_but_migrates_epsfs(tmp_path: Path):

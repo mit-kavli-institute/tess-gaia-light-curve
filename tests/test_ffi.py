@@ -13,6 +13,7 @@ import pytest
 
 from tglc.ffi import FFICutout, ffi
 from tglc.utils.constants import DEFAULT_FILTER_MARGIN
+from tglc.utils.proper_motion import propagate_gaia_catalog
 
 from .synthetic_data import (
     make_constructed_cutout,
@@ -22,8 +23,10 @@ from .synthetic_data import (
 )
 
 
-# Epochs used by make_constructed_cutout: median cadence TJD 4041.5 is Julian year
-# 2026.0, exactly 10 years after the Gaia DR3 reference epoch J2016.0 (TJD 389.0).
+# Epochs used by make_synthetic_gaia_catalog's default propagation: Julian year 2026.0,
+# exactly 10 years after the Gaia DR3 reference epoch J2016.0. make_constructed_cutout's
+# median cadence, TJD 4041.5, matches (2026.0), though the epoch now comes from the
+# catalog meta rather than the cadence times.
 GAIA_REFERENCE_EPOCH = Time(2016.0, format="jyear", scale="tdb")
 OBSERVATION_EPOCH = Time(4041.5, format="tjd", scale="tdb")
 
@@ -328,10 +331,22 @@ def test_init_records_propagation_epochs():
     assert cutout.pm_reference_epoch == 2016.0
 
 
-def test_init_ref_epoch_column_overrides_default():
-    gaia = make_synthetic_gaia_catalog(ra=[120.5], dec=[-45.25], pmra=[0.0], pmdec=[0.0])
+def test_init_ref_epoch_flows_from_catalog_meta():
+    gaia = make_synthetic_gaia_catalog(
+        ra=[120.5], dec=[-45.25], pmra=[0.0], pmdec=[0.0], propagate=False
+    )
     gaia["ref_epoch"] = np.array([2015.5]) * u.yr
+    propagate_gaia_catalog(gaia, 2026.0)
 
     cutout = make_constructed_cutout(gaia)
 
     assert cutout.pm_reference_epoch == pytest.approx(2015.5)
+
+
+def test_init_rejects_unpropagated_catalog():
+    gaia = make_synthetic_gaia_catalog(
+        ra=[120.5], dec=[-45.25], pmra=[0.0], pmdec=[0.0], propagate=False
+    )
+
+    with pytest.raises(ValueError, match="not proper-motion propagated"):
+        make_constructed_cutout(gaia)
