@@ -79,3 +79,18 @@ pytest tests/end_to_end/
 ```
 
 The unit-test suite (`tests/test_io.py`, `tests/test_utils/`, etc.) does not require Docker or `psycopg`, so a plain `pytest tests/test_io.py` will succeed without those prerequisites.
+
+## Edge-compression calibration note
+
+The default `--edge-compression-factor` of `3.16e-7` was **determined experimentally for 200 s
+FFIs** (TICA cutouts fit in electrons per cadence, 158.4 s effective exposure), using the sweep in
+`tglc/scripts/edge_compression_sweep.py` / `edge_compression_figure.py` over all 392 cutouts of
+sector 106 (orbits 223–224). Three independent metrics agree on the value: the knee of the
+residual-image MAD curve, the minimum of a 10%-pixel holdout cross-validation, and the minimum of
+the small-aperture light-curve scatter (see issue #25). It matches upstream TGLC's `1e-4` — which
+was calibrated on SPOC images in e-/s — converted to these units
+(`1e-4 / 158.4^1.4 ≈ 8.3e-8`) to within one half-decade grid step.
+
+Because the ePSF fit weights data rows by `1/flux^1.4` while the regularization rows have unit
+weight, the appropriate factor scales with the image's flux units. For FFIs at other cadences,
+rescale by `(effective exposure / 158.4)^1.4`, or re-derive the value with the sweep scripts.

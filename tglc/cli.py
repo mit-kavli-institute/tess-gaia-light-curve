@@ -164,8 +164,13 @@ def parse_tglc_args() -> argparse.Namespace:
     all_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        default=1e-4,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+        # Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence,
+        # 158.4 s effective exposure) with tglc/scripts/edge_compression_sweep.py; see issue #25
+        # and the calibration note at the end of the README. The appropriate value scales with
+        # the flux units, so other cadences rescale as (effective exposure / 158.4)^1.4.
+        default=3.16e-7,
+        help="Scale factor used when forcing edges of ePSF to 0. Default=3.16e-7, determined "
+        "empirically for 200s FFIs.",
     )
     all_parser.add_argument(
         "--no-gpu",
@@ -244,8 +249,13 @@ def parse_tglc_args() -> argparse.Namespace:
     epsfs_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        default=1e-4,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+        # Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence,
+        # 158.4 s effective exposure) with tglc/scripts/edge_compression_sweep.py; see issue #25
+        # and the calibration note at the end of the README. The appropriate value scales with
+        # the flux units, so other cadences rescale as (effective exposure / 158.4)^1.4.
+        default=3.16e-7,
+        help="Scale factor used when forcing edges of ePSF to 0. Default=3.16e-7, determined "
+        "empirically for 200s FFIs.",
     )
     epsfs_parser.add_argument(
         "--no-gpu",
