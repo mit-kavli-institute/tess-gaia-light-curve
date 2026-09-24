@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from tglc import __version__ as tglc_version
+from tglc.utils.constants import DEFAULT_FILTER_MARGIN
 
 
 # Default value for --tglc-data-dir command line argument
@@ -137,6 +138,13 @@ def parse_tglc_args() -> argparse.Namespace:
         help="Overlap between adjacent cutouts (pixels). Default=2.",
     )
     all_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels), admitting halo stars "
+        f"just outside the cutout whose PSF wings overlap it. Default={DEFAULT_FILTER_MARGIN}.",
+    )
+    all_parser.add_argument(
         "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
     )
     all_parser.add_argument(
@@ -156,8 +164,13 @@ def parse_tglc_args() -> argparse.Namespace:
     all_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        default=1e-4,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+        # Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence,
+        # 158.4 s effective exposure) with tglc/scripts/edge_compression_sweep.py; see issue #25
+        # and the calibration note at the end of the README. The appropriate value scales with
+        # the flux units, so other cadences rescale as (effective exposure / 158.4)^1.4.
+        default=3.16e-7,
+        help="Scale factor used when forcing edges of ePSF to 0. Default=3.16e-7, determined "
+        "empirically for 200s FFIs.",
     )
     all_parser.add_argument(
         "--no-gpu",
@@ -202,6 +215,13 @@ def parse_tglc_args() -> argparse.Namespace:
         default=2,
         help="Overlap between adjacent cutouts (pixels). Default=2.",
     )
+    cutouts_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels), admitting halo stars "
+        f"just outside the cutout whose PSF wings overlap it. Default={DEFAULT_FILTER_MARGIN}.",
+    )
 
     epsfs_parser = tglc_commands.add_parser(
         "epsfs",
@@ -229,8 +249,13 @@ def parse_tglc_args() -> argparse.Namespace:
     epsfs_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        default=1e-4,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+        # Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence,
+        # 158.4 s effective exposure) with tglc/scripts/edge_compression_sweep.py; see issue #25
+        # and the calibration note at the end of the README. The appropriate value scales with
+        # the flux units, so other cadences rescale as (effective exposure / 158.4)^1.4.
+        default=3.16e-7,
+        help="Scale factor used when forcing edges of ePSF to 0. Default=3.16e-7, determined "
+        "empirically for 200s FFIs.",
     )
     epsfs_parser.add_argument(
         "--no-gpu",
@@ -248,13 +273,62 @@ def parse_tglc_args() -> argparse.Namespace:
         "-t", "--tic", type=int, nargs="+", help="Produce light curves only for listed TIC IDs."
     )
     lightcurves_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+        "--tic-file",
+        type=Path,
+        help="Path to a file listing TIC IDs to produce light curves for, for target lists too "
+        "long to pass with --tic. IDs are separated by any mix of whitespace and commas (one per "
+        "line works), and blank lines and '#' comments are ignored. IDs are combined with --tic, "
+        "and any ID that doesn't appear in a processed cutout's TIC catalog is skipped with a "
+        "warning at the end of the run.",
     )
     lightcurves_parser.add_argument(
+        "--max-magnitude",
+        # The "all" command uses --max-magnitude for the TIC query, so this one gets its own
+        # destination and is left unset there (see the post-parsing logic below).
+        dest="light_curve_max_magnitude",
+        metavar="MAX_MAGNITUDE",
+        type=float,
+        help="Produce light curves only for targets brighter than this TESS magnitude, using the "
+        "same strictly-brighter-than convention as the TIC query in 'tglc catalogs'. The limit is "
+        "applied to the Gaia-derived magnitude recorded in each light curve, not the TIC Tmag the "
+        "catalog query filters on. Targets listed with --tic/--tic-file are produced in addition "
+        "to the magnitude-limited sample, whatever their magnitude. Default is to produce light "
+        "curves for every target in the cutout's TIC catalog.",
+    )
+
+    # TEMPORARY command for the retroactive reprocessing campaign (issue #1): remove along with
+    # tglc/scripts/migrate.py when the campaign is complete.
+    migrate_parser = tglc_commands.add_parser(
+        "migrate",
+        description="TEMPORARY: migrate legacy source pickles and ePSF .npy files to FITS. "
+        "Cutout migration re-derives the Gaia/TIC catalog tables from the per-CCD ECSV "
+        "catalogs, which must be on disk (regenerate with 'tglc catalogs' if needed; no FFI "
+        "reads involved). Existing cutout FITS files missing the PMEPOCH keyword (produced "
+        "by the old naive migration), or whose FILTMARG keyword is absent or differs from "
+        "the requested --filter-margin, are re-migrated automatically without --replace.",
+        help="Migrate legacy .pkl/.npy data products to FITS (temporary)",
+        parents=[command_base_parser],
+    )
+    migrate_parser.add_argument(
+        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+    )
+    migrate_parser.add_argument(
         "--oversample",
         type=int,
         default=2,
         help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+    )
+    migrate_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels) used when re-deriving "
+        f"the catalogs; recorded in the FILTMARG keyword. Default={DEFAULT_FILTER_MARGIN}.",
+    )
+    migrate_parser.add_argument(
+        "--delete-original",
+        action="store_true",
+        help="Delete legacy files after the FITS replacement is verified readable",
     )
 
     args = tglc_parser.parse_args()
@@ -268,7 +342,12 @@ def parse_tglc_args() -> argparse.Namespace:
         args.tic_only = False
         args.gaia_only = False
         # Specifying a small number of TIC IDs doesn't make sense for the "all" command, but the
-        # light curves script expects `args` to have the `tic` attribute.
+        # light curves script expects `args` to have the `tic` and `tic_file` attributes.
         args.tic = None
+        args.tic_file = None
+        # The magnitude limits given to the "all" command apply to the TIC query, which already
+        # determines which targets exist; reapplying --max-magnitude to the light curves would
+        # additionally drop the M dwarfs admitted by --mdwarf-magnitude.
+        args.light_curve_max_magnitude = None
 
     return args

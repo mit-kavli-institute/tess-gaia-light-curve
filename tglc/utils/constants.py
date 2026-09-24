@@ -28,6 +28,13 @@ TESS pixel saturation level, from the TESS Instrument Handbook, p37.
 See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
 """
 
+DEFAULT_FILTER_MARGIN = 6.0
+"""
+Default extra margin in pixels applied to the star selection window around a cutout,
+admitting halo stars just outside the cutout whose PSF wings overlap it. ~0.5 px beyond
+the 5.5 px half-width of the 11 px ePSF stamp, as headroom for proper motion errors.
+"""
+
 
 def convert_tess_flux_to_tess_magnitude(flux: u.Quantity) -> npt.ArrayLike:
     """
@@ -72,6 +79,19 @@ def get_exposure_time_from_sector(sector: int) -> u.Quantity:
         return 200 * u.second
 
 
+def get_effective_exposure_time_from_sector(sector: int) -> u.Quantity:
+    """
+    Get the effective per-cadence integration time (in seconds) for the given sector.
+
+    This is the value TICA reports as ``EXPTIME``: the FFI cadence length from
+    `get_exposure_time_from_sector` scaled by 0.8 (onboard cosmic-ray mitigation keeps 8 of every
+    10 two-second frames) and 0.99 (each frame integrates for 1.98 of its 2 seconds).
+    """
+    # Computed as * 792 / 1000 so results match TICA EXPTIME header values (e.g. 158.4)
+    # bit-for-bit, which * 0.8 * 0.99 in floating point does not guarantee.
+    return get_exposure_time_from_sector(sector) * 792 / 1000
+
+
 def get_sector_containing_orbit(orbit: int) -> int:
     """Get the TESS sector containing a TESS orbit."""
     if 9 <= orbit <= 200:
@@ -98,6 +118,29 @@ def get_orbits_in_sector(sector: int) -> list[int]:
         return [sector * 2 + 11, sector * 2 + 12]
     else:
         raise ValueError(f"Orbits not known for sector {sector}")
+
+
+def get_orbit_midtime(orbit: int) -> Time:
+    """
+    Get the approximate mid-time of a TESS orbit from the `tesswcs` sector pointings table.
+
+    The sector's ``Start``/``End`` span is divided evenly among its orbits, so the mid-time
+    of orbit ``i`` of ``n`` is at fraction ``(i + 0.5) / n`` of the sector (0.25/0.75 for
+    ordinary 2-orbit sectors). This is accurate to ~days, which is sufficient for uses like
+    proper-motion epochs where a day corresponds to <0.001 px even at 1"/yr.
+    """
+    # Imported locally so importing this module doesn't pay for tesswcs's data tables.
+    import tesswcs
+
+    sector = get_sector_containing_orbit(orbit)
+    pointings = tesswcs.pointings[tesswcs.pointings["Sector"] == sector]
+    if len(pointings) == 0:
+        raise ValueError(f"tesswcs has no pointing for sector {sector} (orbit {orbit})")
+    start = float(pointings["Start"][0])
+    end = float(pointings["End"][0])
+    orbits = get_orbits_in_sector(sector)
+    fraction = (orbits.index(orbit) + 0.5) / len(orbits)
+    return Time(start + fraction * (end - start), format="jd", scale="tdb")
 
 
 def convert_gaia_mags_to_tmag(

@@ -58,6 +58,10 @@ def tglc_main():
         from tglc.scripts.light_curves import make_light_curves_main
 
         make_light_curves_main(args)
+    elif args.tglc_command == "migrate":
+        from tglc.scripts.migrate import migrate_main
+
+        migrate_main(args)
     elif args.tglc_command == "all":
 
         def log_heading(msg: str):

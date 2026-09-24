@@ -14,7 +14,9 @@ from tglc.utils.constants import (
     convert_gaia_mags_to_tmag,
     convert_tess_flux_to_tess_magnitude,
     convert_tess_magnitude_to_tess_flux,
+    get_effective_exposure_time_from_sector,
     get_exposure_time_from_sector,
+    get_orbit_midtime,
     get_orbits_in_sector,
     get_sector_containing_orbit,
 )
@@ -64,6 +66,20 @@ def test_get_exposure_time_from_sector_with_invalid_sector(bad_sector: int):
         get_exposure_time_from_sector(bad_sector)
 
 
+def test_get_effective_exposure_time_from_sector():
+    # Values must match TICA EXPTIME header values bit-for-bit (see the function's docstring).
+    assert get_effective_exposure_time_from_sector(1).to_value(u.second) == 1425.6
+    assert get_effective_exposure_time_from_sector(27).to_value(u.second) == 475.2
+    assert get_effective_exposure_time_from_sector(56).to_value(u.second) == 158.4
+    assert get_effective_exposure_time_from_sector(106).to_value(u.second) == 158.4
+
+
+@pytest.mark.parametrize("bad_sector", [0, -1])
+def test_get_effective_exposure_time_from_sector_with_invalid_sector(bad_sector: int):
+    with pytest.raises(ValueError):
+        get_effective_exposure_time_from_sector(bad_sector)
+
+
 def test_get_sector_containing_orbit():
     assert get_sector_containing_orbit(9) == 1
     assert get_sector_containing_orbit(10) == 1
@@ -102,6 +118,34 @@ def test_get_orbits_in_sector():
 def test_get_orbits_in_sector_with_invalid_sector(bad_sector: int):
     with pytest.raises(ValueError):
         get_orbits_in_sector(bad_sector)
+
+
+def test_get_orbit_midtime():
+    import tesswcs
+
+    # Sector 89 (orbits 185/186) spans 2460717.5-2460746.5 JD in the tesswcs pointings table.
+    sector_89 = tesswcs.pointings[tesswcs.pointings["Sector"] == 89]
+    start, end = float(sector_89["Start"][0]), float(sector_89["End"][0])
+    first_orbit_midtime = get_orbit_midtime(185)
+    second_orbit_midtime = get_orbit_midtime(186)
+    assert first_orbit_midtime.scale == "tdb"
+    assert first_orbit_midtime.jd == start + 0.25 * (end - start)
+    assert second_orbit_midtime.jd == start + 0.75 * (end - start)
+
+
+def test_get_orbit_midtime_four_orbit_sector():
+    import tesswcs
+
+    sector_97 = tesswcs.pointings[tesswcs.pointings["Sector"] == 97]
+    start, end = float(sector_97["Start"][0]), float(sector_97["End"][0])
+    assert get_orbit_midtime(201).jd == start + 0.125 * (end - start)
+    assert get_orbit_midtime(204).jd == start + 0.875 * (end - start)
+
+
+@pytest.mark.parametrize("bad_orbit", [0, -1, 8, 227])
+def test_get_orbit_midtime_with_invalid_orbit(bad_orbit: int):
+    with pytest.raises(ValueError):
+        get_orbit_midtime(bad_orbit)
 
 
 @pytest.mark.parametrize(

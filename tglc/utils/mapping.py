@@ -23,12 +23,21 @@ def pool_map_if_multiprocessing(
         yield from map(func, iterable)
 
 
-def consume_iterator_with_progress_bar(iterator: Iterable, *args, **kwargs):
+def iterate_with_progress_bar(iterator: Iterable, *args, **kwargs):
     """
-    Consume an iterator with a progress bar. Logging is redirected.
+    Yield items from an iterator with a progress bar. Logging is redirected.
 
     Additional positional and keyword arguments are passed to `tqdm.tqdm`.
     """
     with logging_redirect_tqdm():
-        for _ in tqdm(iterator, *args, **kwargs):
-            pass
+        yield from tqdm(iterator, *args, **kwargs)
+
+
+def consume_iterator_with_progress_bar(iterator: Iterable, *args, **kwargs):
+    """
+    Consume an iterator with a progress bar, discarding results. Logging is redirected.
+
+    Additional positional and keyword arguments are passed to `tqdm.tqdm`.
+    """
+    for _ in iterate_with_progress_bar(iterator, *args, **kwargs):
+        pass

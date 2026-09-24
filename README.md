@@ -41,13 +41,14 @@ Each of the subcommands has additional information available via a similar help 
 
 ## Development
 
-If you want to work directly with this code base, clone the repository, create a virtual environment, and install the project in editable mode.
+If you want to work directly with this code base, clone the repository, create a virtual environment, and install the project in editable mode. The `[dev]` extra pulls in `pyticdb`, which lives on the MIT-Kavli PyPI index, so the index needs to be passed to `pip` with `--extra-index-url`.
 
 ```shell
 git clone git@github.com:mit-kavli-institute/tess-gaia-light-curve.git
 python3 -m venv .venv  # or use conda or uv
 source .venv/bin/activate  # if you used venv as above
-pip install -e ".[dev]"
+pip install -e ".[dev]" \
+  --extra-index-url https://mit-kavli-institute.github.io/MIT-Kavli-PyPi/
 ```
 
 You now have the `tglc` package and all its dependencies available to use in scripts and notebooks. If you edit the codebase, you can run the tools that are set up for checking the code.
@@ -57,3 +58,39 @@ ruff format .  # formatter
 ruff check .  # linter
 pytest  # test suite
 ```
+
+### End-to-end tests
+
+The end-to-end suite in `tests/end_to_end/` exercises the full pipeline (catalogs → cutouts → ePSFs → light curves) against fake TIC and Gaia databases that are brought up as PostgreSQL containers via `docker compose`, plus a handful of TICA FFIs downloaded from MAST via [pooch](https://www.fatiando.org/pooch/). To run it you need:
+
+- The Docker daemon running locally (Docker Desktop, Colima, or equivalent).
+- `psycopg`'s binary wheel, so libpq does not need to be installed system-wide:
+
+  ```shell
+  pip install "psycopg[binary]"
+  ```
+
+- An internet connection on first run, for `pooch` to fetch the sample FFIs (cached afterward in `tests/sample_data/ffi/`).
+
+With those in place, the e2e tests run as part of the standard `pytest` invocation. They can also be exercised in isolation:
+
+```shell
+pytest tests/end_to_end/
+```
+
+The unit-test suite (`tests/test_io.py`, `tests/test_utils/`, etc.) does not require Docker or `psycopg`, so a plain `pytest tests/test_io.py` will succeed without those prerequisites.
+
+## Edge-compression calibration note
+
+The default `--edge-compression-factor` of `3.16e-7` was **determined experimentally for 200 s
+FFIs** (TICA cutouts fit in electrons per cadence, 158.4 s effective exposure), using the sweep in
+`tglc/scripts/edge_compression_sweep.py` / `edge_compression_figure.py` over all 392 cutouts of
+sector 106 (orbits 223–224). Three independent metrics agree on the value: the knee of the
+residual-image MAD curve, the minimum of a 10%-pixel holdout cross-validation, and the minimum of
+the small-aperture light-curve scatter (see issue #25). It matches upstream TGLC's `1e-4` — which
+was calibrated on SPOC images in e-/s — converted to these units
+(`1e-4 / 158.4^1.4 ≈ 8.3e-8`) to within one half-decade grid step.
+
+Because the ePSF fit weights data rows by `1/flux^1.4` while the regularization rows have unit
+weight, the appropriate factor scales with the image's flux units. For FFIs at other cadences,
+rescale by `(effective exposure / 158.4)^1.4`, or re-derive the value with the sweep scripts.
