@@ -272,6 +272,29 @@ def parse_tglc_args() -> argparse.Namespace:
     lightcurves_parser.add_argument(
         "-t", "--tic", type=int, nargs="+", help="Produce light curves only for listed TIC IDs."
     )
+    lightcurves_parser.add_argument(
+        "--tic-file",
+        type=Path,
+        help="Path to a file listing TIC IDs to produce light curves for, for target lists too "
+        "long to pass with --tic. IDs are separated by any mix of whitespace and commas (one per "
+        "line works), and blank lines and '#' comments are ignored. IDs are combined with --tic, "
+        "and any ID that doesn't appear in a processed cutout's TIC catalog is skipped with a "
+        "warning at the end of the run.",
+    )
+    lightcurves_parser.add_argument(
+        "--max-magnitude",
+        # The "all" command uses --max-magnitude for the TIC query, so this one gets its own
+        # destination and is left unset there (see the post-parsing logic below).
+        dest="light_curve_max_magnitude",
+        metavar="MAX_MAGNITUDE",
+        type=float,
+        help="Produce light curves only for targets brighter than this TESS magnitude, using the "
+        "same strictly-brighter-than convention as the TIC query in 'tglc catalogs'. The limit is "
+        "applied to the Gaia-derived magnitude recorded in each light curve, not the TIC Tmag the "
+        "catalog query filters on. Targets listed with --tic/--tic-file are produced in addition "
+        "to the magnitude-limited sample, whatever their magnitude. Default is to produce light "
+        "curves for every target in the cutout's TIC catalog.",
+    )
 
     # TEMPORARY command for the retroactive reprocessing campaign (issue #1): remove along with
     # tglc/scripts/migrate.py when the campaign is complete.
@@ -319,7 +342,12 @@ def parse_tglc_args() -> argparse.Namespace:
         args.tic_only = False
         args.gaia_only = False
         # Specifying a small number of TIC IDs doesn't make sense for the "all" command, but the
-        # light curves script expects `args` to have the `tic` attribute.
+        # light curves script expects `args` to have the `tic` and `tic_file` attributes.
         args.tic = None
+        args.tic_file = None
+        # The magnitude limits given to the "all" command apply to the TIC query, which already
+        # determines which targets exist; reapplying --max-magnitude to the light curves would
+        # additionally drop the M dwarfs admitted by --mdwarf-magnitude.
+        args.light_curve_max_magnitude = None
 
     return args

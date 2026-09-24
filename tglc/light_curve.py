@@ -369,6 +369,7 @@ def generate_light_curves(
     epsf: EPSF,
     ephemerides_directory: Path,
     tic_ids: list[int] | None = None,
+    max_magnitude: float | None = None,
 ) -> Generator[ApertureLightCurve, None, None]:
     """
     Generator function that yields aperture light curves extracted from the source cutout.
@@ -384,8 +385,22 @@ def generate_light_curves(
         Directory containing cached TESS spacecraft ephemeris files, used for barycentric time
         corrections.
     tic_ids : list[int] | None
-        Optional list of TIC IDs that should have light curves made. If specified, all other targets
-        will be ignored. By default, all targets in the source TIC catalog have light curves made.
+        Optional list of TIC IDs that should have light curves made. Listed IDs that don't appear in
+        the source TIC catalog are ignored, so the same list can be given for every cutout. By
+        default, all targets in the source TIC catalog have light curves made.
+    max_magnitude : float | None
+        Optional magnitude limit: only targets strictly brighter than this TESS magnitude have light
+        curves made, matching the convention of the TIC query in `tglc catalogs`. The limit is
+        applied to the Gaia-derived `tess_mag` of the target's cross-matched Gaia row, which is the
+        magnitude recorded in the light curve, not the TIC `tmag` the catalog query filters on. By
+        default, targets of all magnitudes have light curves made.
+
+    Notes
+    -----
+    `tic_ids` and `max_magnitude` are additive: when both are given, a target has a light curve made
+    if it is brighter than the limit **or** it is explicitly listed. This makes it possible to
+    extract a magnitude-limited sample alongside a list of fainter targets of interest. When only
+    one is given, it acts as the sole selection.
 
     Yields
     ------
@@ -408,12 +423,32 @@ def generate_light_curves(
         )
 
     tic_match_table = source.tic
-    if tic_ids is not None:
-        tic_match_table = tic_match_table[np.isin(tic_match_table["TIC"], tic_ids)]
+    if tic_ids is not None or max_magnitude is not None:
+        # Selecting here rather than in the loop below lets cutouts with no targets left skip the
+        # design matrix entirely.
+        selected_targets = np.zeros(len(tic_match_table), dtype=bool)
+        if max_magnitude is not None:
+            # The cutout's TIC table carries only the TIC <-> Gaia crossmatch, so the limit is
+            # applied to the Gaia-derived magnitude of the matching Gaia row.
+            gaia_designations = np.asarray(source.gaia["designation"])
+            bright_designations = set(
+                gaia_designations[np.asarray(source.gaia["tess_mag"]) < max_magnitude]
+            )
+            selected_targets |= np.array(
+                [
+                    f"Gaia DR3 {gaia3_id}" in bright_designations
+                    for gaia3_id in tic_match_table["gaia3"]
+                ],
+                dtype=bool,
+            )
+        if tic_ids is not None:
+            # Explicitly listed targets are included regardless of magnitude.
+            selected_targets |= np.isin(tic_match_table["TIC"], tic_ids)
+        tic_match_table = tic_match_table[selected_targets]
     if len(tic_match_table) == 0:
         logger.debug("No targets found, skipping light curve generation")
         return
-    logger.debug(f"Making light curves for {tic_match_table} targets")
+    logger.debug(f"Making light curves for {len(tic_match_table)} targets")
 
     star_positions = source.star_positions
     design_matrix, _ = epsf.make_design_matrix(

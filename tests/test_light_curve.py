@@ -216,6 +216,58 @@ def test_generate_light_curves_tic_ids_filter(monkeypatch):
     assert light_curves[0].meta["tic_id"] == 500002
 
 
+def test_generate_light_curves_max_magnitude_filter(monkeypatch):
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    cutout, epsf = _make_cutout_and_epsf()
+
+    # Synthetic Gaia magnitudes are 9.95, 11.45, 12.25, 12.95; star 4 is outside the pixel bounds
+    light_curves = list(
+        generate_light_curves(cutout, epsf, Path("/nonexistent"), max_magnitude=12.25)
+    )
+
+    assert [light_curve.meta["tic_id"] for light_curve in light_curves] == [500001, 500002]
+
+
+def test_generate_light_curves_tic_ids_add_to_max_magnitude_selection(monkeypatch):
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    cutout, epsf = _make_cutout_and_epsf()
+
+    # TIC 500003 (12.25 mag) is fainter than the limit, but is requested explicitly
+    light_curves = list(
+        generate_light_curves(
+            cutout, epsf, Path("/nonexistent"), tic_ids=[500003], max_magnitude=12.0
+        )
+    )
+
+    assert [light_curve.meta["tic_id"] for light_curve in light_curves] == [
+        500001,
+        500002,
+        500003,
+    ]
+
+
+def test_generate_light_curves_ignores_tic_ids_absent_from_cutout(monkeypatch):
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    cutout, epsf = _make_cutout_and_epsf()
+
+    light_curves = list(
+        generate_light_curves(cutout, epsf, Path("/nonexistent"), tic_ids=[500002, 999999])
+    )
+
+    assert [light_curve.meta["tic_id"] for light_curve in light_curves] == [500002]
+
+
+def test_generate_light_curves_max_magnitude_filter_excludes_all_targets(monkeypatch):
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    cutout, epsf = _make_cutout_and_epsf()
+
+    light_curves = list(
+        generate_light_curves(cutout, epsf, Path("/nonexistent"), max_magnitude=5.0)
+    )
+
+    assert light_curves == []
+
+
 def test_generate_light_curves_rejects_mismatched_epsf():
     cutout, _ = _make_cutout_and_epsf()
     mismatched_epsf = EPSF(
