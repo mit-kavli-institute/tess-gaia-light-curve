@@ -5,8 +5,6 @@ import importlib
 from pathlib import Path
 
 import pytest
-import pyticdb
-import sqlalchemy as sa
 
 from .sample_data import sample_ffis  # noqa: F401
 
@@ -37,8 +35,12 @@ def tmp_pyticdb_config(
     """Pytest fixture that creates a pyticdb configuration file and monkeypatches pyticdb to look
     in the proper directory for the configuration.
 
+    Skips the test if `pyticdb` is not installed -- the package lives on the MIT-Kavli PyPI index
+    and is not always available locally.
+
     Returns a `Path` object for the configuration directory.
     """
+    pyticdb = pytest.importorskip("pyticdb")
     config_dir = tmp_path / ".config" / "tic"
     config_dir.mkdir(parents=True)
     with open(config_dir / "db.conf", "w") as db_conf_file:
@@ -66,21 +68,36 @@ def docker_compose_file():
     return Path(__file__).parent / "sample_data" / "databases" / "docker-compose.yml"
 
 
-def is_pyticdb_running(db_name: str):
-    try:
-        with pyticdb.Databases[db_name][1]().connection():
-            return True
-    except sa.exc.OperationalError:
-        return False
-
-
 @pytest.fixture(scope="session")
 def pyticdb_database_service(docker_services):
+    """Wait until both TIC and Gaia postgres containers are responsive on their published ports.
+
+    Probes the containers directly via psycopg rather than through pyticdb. The pyticdb config that
+    points at these ports is set up by the function-scoped :func:`tmp_pyticdb_config` fixture,
+    which runs after session-scoped fixtures, so it isn't available here.
+    """
+    pytest.importorskip("pyticdb")
+    psycopg = pytest.importorskip("psycopg")
+
+    def is_postgres_ready(port: int) -> bool:
+        try:
+            with psycopg.connect(
+                host="127.0.0.1",
+                port=port,
+                user="tglctester",
+                password="password",
+                dbname="postgres",
+                connect_timeout=2,
+            ):
+                return True
+        except psycopg.OperationalError:
+            return False
+
     docker_services.wait_until_responsive(
-        timeout=20.0, pause=0.25, check=lambda: is_pyticdb_running("tic_82")
+        timeout=60.0, pause=0.5, check=lambda: is_postgres_ready(5432)
     )
     docker_services.wait_until_responsive(
-        timeout=20.0, pause=0.25, check=lambda: is_pyticdb_running("gaia3")
+        timeout=60.0, pause=0.5, check=lambda: is_postgres_ready(5433)
     )
 
 

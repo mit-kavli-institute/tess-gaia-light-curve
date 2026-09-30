@@ -126,7 +126,15 @@ class Manifest:
 
     @property
     def source_file(self) -> Path:
-        """Source cutout pickle file."""
+        """FFI cutout FITS file."""
+        return self.source_directory / f"source_{self.cutout_x}_{self.cutout_y}.fits"
+
+    @property
+    def source_file_legacy_pkl(self) -> Path:
+        """Legacy pickle path used before the move to FITS (issue #1).
+
+        Retained so migration helpers can locate old files.
+        """
         return self.source_directory / f"source_{self.cutout_x}_{self.cutout_y}.pkl"
 
     @property
@@ -136,7 +144,12 @@ class Manifest:
 
     @property
     def epsf_file(self) -> Path:
-        """ePSF numpy object files."""
+        """ePSF FITS file."""
+        return self.epsf_directory / f"epsf_{self.cutout_x}_{self.cutout_y}.fits"
+
+    @property
+    def epsf_file_legacy_npy(self) -> Path:
+        """Legacy NumPy ePSF path used before the move to FITS (issue #1)."""
         return self.epsf_directory / f"epsf_{self.cutout_x}_{self.cutout_y}.npy"
 
     @property

@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import importlib
 import os
 from pathlib import Path
+import sys
 
 from tglc import cli
 
@@ -64,3 +65,41 @@ def test_tglc_data_dir_falls_back_to_cwd(tmp_path: Path):
     with tmp_chdir(tmp_path):
         args = cli.command_base_parser.parse_args(["-o", "1"])
         assert args.tglc_data_dir == tmp_path
+
+
+def _parse_tglc_args(monkeypatch, *argv: str):
+    monkeypatch.setattr(sys, "argv", ["tglc", *argv])
+    return cli.parse_tglc_args()
+
+
+def test_lightcurves_magnitude_limit_defaults_to_none(monkeypatch):
+    args = _parse_tglc_args(monkeypatch, "lightcurves", "-o", "185")
+
+    assert args.light_curve_max_magnitude is None
+
+
+def test_lightcurves_magnitude_limit(monkeypatch):
+    args = _parse_tglc_args(monkeypatch, "lightcurves", "-o", "185", "--max-magnitude", "13.5")
+
+    assert args.light_curve_max_magnitude == 13.5
+
+
+def test_all_command_does_not_apply_catalog_magnitude_limit_to_light_curves(monkeypatch):
+    args = _parse_tglc_args(monkeypatch, "all", "-o", "185", "--max-magnitude", "12.0")
+
+    assert args.max_magnitude == 12.0
+    assert args.light_curve_max_magnitude is None
+    assert args.tic is None
+    assert args.tic_file is None
+
+
+def test_lightcurves_tic_file_defaults_to_none(monkeypatch):
+    args = _parse_tglc_args(monkeypatch, "lightcurves", "-o", "185")
+
+    assert args.tic_file is None
+
+
+def test_lightcurves_tic_file(monkeypatch):
+    args = _parse_tglc_args(monkeypatch, "lightcurves", "-o", "185", "--tic-file", "targets.txt")
+
+    assert args.tic_file == Path("targets.txt")

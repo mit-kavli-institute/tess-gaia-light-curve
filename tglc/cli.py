@@ -4,6 +4,17 @@ import argparse
 from pathlib import Path
 
 from tglc import __version__ as tglc_version
+from tglc.utils.constants import (
+    DEFAULT_CUTOUT_OVERLAP,
+    DEFAULT_CUTOUT_SIZE,
+    DEFAULT_EDGE_COMPRESSION,
+    DEFAULT_FILTER_MARGIN,
+    DEFAULT_MAX_MAGNITUDE,
+    DEFAULT_MDWARF_MAGNITUDE,
+    DEFAULT_PSF_OVERSAMPLE,
+    DEFAULT_PSF_SIZE,
+    DEFAULT_UNCERTAINTY_POWER,
+)
 
 
 # Default value for --tglc-data-dir command line argument
@@ -114,50 +125,62 @@ def parse_tglc_args() -> argparse.Namespace:
     all_parser.add_argument(
         "--max-magnitude",
         type=float,
-        default=13.5,
-        help="Main magnitude limit for TIC query",
+        default=DEFAULT_MAX_MAGNITUDE,
+        help=f"Main magnitude limit for TIC query. Default={DEFAULT_MAX_MAGNITUDE}.",
     )
     all_parser.add_argument(
         "--mdwarf-magnitude",
         type=float,
-        default=15.0,
-        help="Magnitude limit for M-dwarfs in TIC query",
+        default=DEFAULT_MDWARF_MAGNITUDE,
+        help=f"Magnitude limit for M-dwarfs in TIC query. Default={DEFAULT_MDWARF_MAGNITUDE}.",
     )
     all_parser.add_argument(
         "-s",
         "--cutout-size",
         type=int,
-        default=150,
-        help="Cutout side length (pixels). Default=150.",
+        default=DEFAULT_CUTOUT_SIZE,
+        help=f"Cutout side length (pixels). Default={DEFAULT_CUTOUT_SIZE}.",
     )
     all_parser.add_argument(
         "--overlap",
         type=int,
-        default=2,
-        help="Overlap between adjacent cutouts (pixels). Default=2.",
+        default=DEFAULT_CUTOUT_OVERLAP,
+        help=f"Overlap between adjacent cutouts (pixels). Default={DEFAULT_CUTOUT_OVERLAP}.",
     )
     all_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels), admitting halo stars "
+        f"just outside the cutout whose PSF wings overlap it. Default={DEFAULT_FILTER_MARGIN}.",
+    )
+    all_parser.add_argument(
+        "--psf-size",
+        type=int,
+        default=DEFAULT_PSF_SIZE,
+        help=f"Side length in pixels of square PSF. Default={DEFAULT_PSF_SIZE}.",
     )
     all_parser.add_argument(
         "--oversample",
         type=int,
-        default=2,
-        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+        default=DEFAULT_PSF_OVERSAMPLE,
+        help="Factor used to oversample the PSF compared to image pixels. "
+        f"Default={DEFAULT_PSF_OVERSAMPLE}.",
     )
     all_parser.add_argument(
         "--uncertainty-power",
         type=float,
-        default=1.4,
+        default=DEFAULT_UNCERTAINTY_POWER,
         help="Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes "
-        "contributions from dimmer stars, 1 means all contributions are equal. Default=1.4 "
-        "determined empirically.",
+        "contributions from dimmer stars, 1 means all contributions are equal. "
+        f"Default={DEFAULT_UNCERTAINTY_POWER} determined empirically.",
     )
     all_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        default=1e-4,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+        default=DEFAULT_EDGE_COMPRESSION,
+        help="Scale factor used when forcing edges of ePSF to 0. "
+        f"Default={DEFAULT_EDGE_COMPRESSION}, determined empirically for 200s FFIs.",
     )
     all_parser.add_argument(
         "--no-gpu",
@@ -172,13 +195,16 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     catalogs_parser.add_argument(
-        "--max-magnitude", type=float, default=13.5, help="Main magnitude limit for TIC query"
+        "--max-magnitude",
+        type=float,
+        default=DEFAULT_MAX_MAGNITUDE,
+        help=f"Main magnitude limit for TIC query. Default={DEFAULT_MAX_MAGNITUDE}.",
     )
     catalogs_parser.add_argument(
         "--mdwarf-magnitude",
         type=float,
-        default=15.0,
-        help="Magnitude limit for M-dwarfs in TIC query",
+        default=DEFAULT_MDWARF_MAGNITUDE,
+        help=f"Magnitude limit for M-dwarfs in TIC query. Default={DEFAULT_MDWARF_MAGNITUDE}.",
     )
     catalogs_parser.add_argument("--tic-only", action="store_true", help="Make only TIC catalogs")
     catalogs_parser.add_argument("--gaia-only", action="store_true", help="Make only Gaia catalogs")
@@ -193,14 +219,21 @@ def parse_tglc_args() -> argparse.Namespace:
         "-s",
         "--cutout-size",
         type=int,
-        default=150,
-        help="Cutout side length (pixels). Default=150.",
+        default=DEFAULT_CUTOUT_SIZE,
+        help=f"Cutout side length (pixels). Default={DEFAULT_CUTOUT_SIZE}.",
     )
     cutouts_parser.add_argument(
         "--overlap",
         type=int,
-        default=2,
-        help="Overlap between adjacent cutouts (pixels). Default=2.",
+        default=DEFAULT_CUTOUT_OVERLAP,
+        help=f"Overlap between adjacent cutouts (pixels). Default={DEFAULT_CUTOUT_OVERLAP}.",
+    )
+    cutouts_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels), admitting halo stars "
+        f"just outside the cutout whose PSF wings overlap it. Default={DEFAULT_FILTER_MARGIN}.",
     )
 
     epsfs_parser = tglc_commands.add_parser(
@@ -210,27 +243,32 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     epsfs_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+        "--psf-size",
+        type=int,
+        default=DEFAULT_PSF_SIZE,
+        help=f"Side length in pixels of square PSF. Default={DEFAULT_PSF_SIZE}.",
     )
     epsfs_parser.add_argument(
         "--oversample",
         type=int,
-        default=2,
-        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+        default=DEFAULT_PSF_OVERSAMPLE,
+        help="Factor used to oversample the PSF compared to image pixels. "
+        f"Default={DEFAULT_PSF_OVERSAMPLE}.",
     )
     epsfs_parser.add_argument(
         "--uncertainty-power",
         type=float,
-        default=1.4,
+        default=DEFAULT_UNCERTAINTY_POWER,
         help="Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes "
-        "contributions from dimmer stars, 1 means all contributions are equal. Default=1.4 "
-        "determined empirically.",
+        "contributions from dimmer stars, 1 means all contributions are equal. "
+        f"Default={DEFAULT_UNCERTAINTY_POWER} determined empirically.",
     )
     epsfs_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        default=1e-4,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=1e-4.",
+        default=DEFAULT_EDGE_COMPRESSION,
+        help="Scale factor used when forcing edges of ePSF to 0. "
+        f"Default={DEFAULT_EDGE_COMPRESSION}, determined empirically for 200s FFIs.",
     )
     epsfs_parser.add_argument(
         "--no-gpu",
@@ -248,13 +286,66 @@ def parse_tglc_args() -> argparse.Namespace:
         "-t", "--tic", type=int, nargs="+", help="Produce light curves only for listed TIC IDs."
     )
     lightcurves_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+        "--tic-file",
+        type=Path,
+        help="Path to a file listing TIC IDs to produce light curves for, for target lists too "
+        "long to pass with --tic. IDs are separated by any mix of whitespace and commas (one per "
+        "line works), and blank lines and '#' comments are ignored. IDs are combined with --tic, "
+        "and any ID that doesn't appear in a processed cutout's TIC catalog is skipped with a "
+        "warning at the end of the run.",
     )
     lightcurves_parser.add_argument(
+        "--max-magnitude",
+        # The "all" command uses --max-magnitude for the TIC query, so this one gets its own
+        # destination and is left unset there (see the post-parsing logic below).
+        dest="light_curve_max_magnitude",
+        metavar="MAX_MAGNITUDE",
+        type=float,
+        help="Produce light curves only for targets brighter than this TESS magnitude, using the "
+        "same strictly-brighter-than convention as the TIC query in 'tglc catalogs'. The limit is "
+        "applied to the Gaia-derived magnitude recorded in each light curve, not the TIC Tmag the "
+        "catalog query filters on. Targets listed with --tic/--tic-file are produced in addition "
+        "to the magnitude-limited sample, whatever their magnitude. Default is to produce light "
+        "curves for every target in the cutout's TIC catalog.",
+    )
+
+    # TEMPORARY command for the retroactive reprocessing campaign (issue #1): remove along with
+    # tglc/scripts/migrate.py when the campaign is complete.
+    migrate_parser = tglc_commands.add_parser(
+        "migrate",
+        description="TEMPORARY: migrate legacy source pickles and ePSF .npy files to FITS. "
+        "Cutout migration re-derives the Gaia/TIC catalog tables from the per-CCD ECSV "
+        "catalogs, which must be on disk (regenerate with 'tglc catalogs' if needed; no FFI "
+        "reads involved). Existing cutout FITS files missing the PMEPOCH keyword (produced "
+        "by the old naive migration), or whose FILTMARG keyword is absent or differs from "
+        "the requested --filter-margin, are re-migrated automatically without --replace.",
+        help="Migrate legacy .pkl/.npy data products to FITS (temporary)",
+        parents=[command_base_parser],
+    )
+    migrate_parser.add_argument(
+        "--psf-size",
+        type=int,
+        default=DEFAULT_PSF_SIZE,
+        help=f"Side length in pixels of square PSF. Default={DEFAULT_PSF_SIZE}.",
+    )
+    migrate_parser.add_argument(
         "--oversample",
         type=int,
-        default=2,
-        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+        default=DEFAULT_PSF_OVERSAMPLE,
+        help="Factor used to oversample the PSF compared to image pixels. "
+        f"Default={DEFAULT_PSF_OVERSAMPLE}.",
+    )
+    migrate_parser.add_argument(
+        "--filter-margin",
+        type=float,
+        default=DEFAULT_FILTER_MARGIN,
+        help="Extra star-selection margin around each cutout (pixels) used when re-deriving "
+        f"the catalogs; recorded in the FILTMARG keyword. Default={DEFAULT_FILTER_MARGIN}.",
+    )
+    migrate_parser.add_argument(
+        "--delete-original",
+        action="store_true",
+        help="Delete legacy files after the FITS replacement is verified readable",
     )
 
     args = tglc_parser.parse_args()
@@ -268,7 +359,12 @@ def parse_tglc_args() -> argparse.Namespace:
         args.tic_only = False
         args.gaia_only = False
         # Specifying a small number of TIC IDs doesn't make sense for the "all" command, but the
-        # light curves script expects `args` to have the `tic` attribute.
+        # light curves script expects `args` to have the `tic` and `tic_file` attributes.
         args.tic = None
+        args.tic_file = None
+        # The magnitude limits given to the "all" command apply to the TIC query, which already
+        # determines which targets exist; reapplying --max-magnitude to the light curves would
+        # additionally drop the M dwarfs admitted by --mdwarf-magnitude.
+        args.light_curve_max_magnitude = None
 
     return args

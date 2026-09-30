@@ -31,7 +31,7 @@ scripts = { tglc = "tglc.__main__:tglc_main" }
 [project.optional-dependencies]
 pyticdb = ["pyticdb"]
 cupy = ["cupy"]
-dev = ["ruff", "pooch", "pytest", "pytest-docker", "tglc[pyticdb]"]
+dev = ["hypothesis", "ruff", "pooch", "pytest", "pytest-docker", "tglc[pyticdb]"]
 
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm>=8"]

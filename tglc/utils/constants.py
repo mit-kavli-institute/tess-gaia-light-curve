@@ -1,5 +1,9 @@
 """
-Astronomical constants and conversions used by TGLC, mostly related to TESS.
+Astronomical constants, pipeline defaults, and conversions used by TGLC, mostly related to TESS.
+
+The ``DEFAULT_*`` values are the single source of truth for the corresponding `tglc` command line
+defaults, which are declared once per subcommand in `tglc.cli` and would otherwise be repeated as
+literals by the "all" command.
 """
 
 from astropy.coordinates import SkyCoord
@@ -26,6 +30,57 @@ TESS_PIXEL_SATURATION_LEVEL = 2e5 * u.electron
 TESS pixel saturation level, from the TESS Instrument Handbook, p37.
 
 See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
+"""
+
+GAIA_DR3_DESIGNATION_PREFIX = "Gaia DR3 "
+"""Prefix of the ``designation`` column in Gaia DR3 catalog tables."""
+
+
+def gaia_dr3_designation(source_id) -> str:
+    """Format a Gaia DR3 source ID as it appears in the catalog ``designation`` column."""
+    return f"{GAIA_DR3_DESIGNATION_PREFIX}{source_id}"
+
+
+DEFAULT_MAX_MAGNITUDE = 13.5
+"""Default main Tmag limit for the TIC query, i.e. the faintest targets TGLC produces."""
+
+DEFAULT_MDWARF_MAGNITUDE = 15.0
+"""Default Tmag limit for the M dwarfs the TIC query admits beyond `DEFAULT_MAX_MAGNITUDE`."""
+
+DEFAULT_CUTOUT_SIZE = 150
+"""Default side length in pixels of the square FFI cutouts the pipeline fits ePSFs to."""
+
+DEFAULT_CUTOUT_OVERLAP = 2
+"""Default overlap in pixels between adjacent cutouts."""
+
+DEFAULT_PSF_SIZE = 11
+"""Default side length in pixels of the square ePSF stamp."""
+
+DEFAULT_PSF_OVERSAMPLE = 2
+"""Default factor by which the ePSF is oversampled relative to image pixels."""
+
+DEFAULT_FILTER_MARGIN = 6.0
+"""
+Default extra margin in pixels applied to the star selection window around a cutout,
+admitting halo stars just outside the cutout whose PSF wings overlap it. ~0.5 px beyond
+the 5.5 px half-width of the 11 px ePSF stamp, as headroom for proper motion errors.
+"""
+
+DEFAULT_UNCERTAINTY_POWER = 1.4
+"""
+Default power of the pixel value used as the observational uncertainty in the ePSF fit. <1
+emphasizes contributions from dimmer stars, 1 means all contributions are equal. Determined
+empirically by Han & Brandt 2023 (AJ 165:71) figure 4.
+"""
+
+DEFAULT_EDGE_COMPRESSION = 3.16e-7
+"""
+Default scale factor used when forcing the edges of the ePSF to 0.
+
+Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence, 158.4 s
+effective exposure) with `tglc.scripts.edge_compression_sweep`; see issue #25 and the calibration
+note at the end of the README. The appropriate value scales with the flux units, so other cadences
+rescale as ``(effective exposure / 158.4) ** DEFAULT_UNCERTAINTY_POWER``.
 """
 
 
@@ -72,6 +127,19 @@ def get_exposure_time_from_sector(sector: int) -> u.Quantity:
         return 200 * u.second
 
 
+def get_effective_exposure_time_from_sector(sector: int) -> u.Quantity:
+    """
+    Get the effective per-cadence integration time (in seconds) for the given sector.
+
+    This is the value TICA reports as ``EXPTIME``: the FFI cadence length from
+    `get_exposure_time_from_sector` scaled by 0.8 (onboard cosmic-ray mitigation keeps 8 of every
+    10 two-second frames) and 0.99 (each frame integrates for 1.98 of its 2 seconds).
+    """
+    # Computed as * 792 / 1000 so results match TICA EXPTIME header values (e.g. 158.4)
+    # bit-for-bit, which * 0.8 * 0.99 in floating point does not guarantee.
+    return get_exposure_time_from_sector(sector) * 792 / 1000
+
+
 def get_sector_containing_orbit(orbit: int) -> int:
     """Get the TESS sector containing a TESS orbit."""
     if 9 <= orbit <= 200:
@@ -98,6 +166,29 @@ def get_orbits_in_sector(sector: int) -> list[int]:
         return [sector * 2 + 11, sector * 2 + 12]
     else:
         raise ValueError(f"Orbits not known for sector {sector}")
+
+
+def get_orbit_midtime(orbit: int) -> Time:
+    """
+    Get the approximate mid-time of a TESS orbit from the `tesswcs` sector pointings table.
+
+    The sector's ``Start``/``End`` span is divided evenly among its orbits, so the mid-time
+    of orbit ``i`` of ``n`` is at fraction ``(i + 0.5) / n`` of the sector (0.25/0.75 for
+    ordinary 2-orbit sectors). This is accurate to ~days, which is sufficient for uses like
+    proper-motion epochs where a day corresponds to <0.001 px even at 1"/yr.
+    """
+    # Imported locally so importing this module doesn't pay for tesswcs's data tables.
+    import tesswcs
+
+    sector = get_sector_containing_orbit(orbit)
+    pointings = tesswcs.pointings[tesswcs.pointings["Sector"] == sector]
+    if len(pointings) == 0:
+        raise ValueError(f"tesswcs has no pointing for sector {sector} (orbit {orbit})")
+    start = float(pointings["Start"][0])
+    end = float(pointings["End"][0])
+    orbits = get_orbits_in_sector(sector)
+    fraction = (orbits.index(orbit) + 0.5) / len(orbits)
+    return Time(start + fraction * (end - start), format="jd", scale="tdb")
 
 
 def convert_gaia_mags_to_tmag(
