@@ -46,6 +46,14 @@ include-package-data = true
 where = ["."]
 include = ["tglc", "tglc.*"]
 
+# Declared explicitly rather than relying on `include-package-data` alone. That setting discovers
+# package data through setuptools-scm's git file finder, which finds nothing when the build runs
+# from a source tree with no git metadata -- an extracted release tarball, a vendored copy, or a
+# checkout exported with `git archive`. The mask was then dropped from the wheel silently, and
+# `tglc cutouts` failed at run time looking for it (FileNotFoundError on median_mask.fits).
+[tool.setuptools.package-data]
+"tglc.utils.data" = ["*.fits"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config", "-m", "not network"]
