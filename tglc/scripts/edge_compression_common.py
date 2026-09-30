@@ -15,8 +15,11 @@ in a sweep campaign so the per-cutout curves can be aggregated.
 
 import numpy as np
 
+from tglc.utils.constants import DEFAULT_EDGE_COMPRESSION, DEFAULT_UNCERTAINTY_POWER
 
-FLUX_UNCERTAINTY_POWER = 1.4
+
+# The sweep holds the weighting power fixed at the pipeline default while sweeping factors.
+FLUX_UNCERTAINTY_POWER = DEFAULT_UNCERTAINTY_POWER
 UPSTREAM_EDGE_COMPRESSION = 1e-4
 # Upstream's 1e-4 converted from SPOC e-/s to TICA electrons per cadence at the sector 90+
 # exposure time: 1e-4 / 158.4^1.4 (158.4^1.4 = 1201.3).
@@ -43,9 +46,9 @@ DEFAULT_FACTORS = [
 ]
 
 # Full-campaign recommendation from the factor sweep (orbits 223+224, 2026-09-15): in-sample
-# knee, holdout-CV optimum, and 3x3 scatter minimum all landed here. Used as the fixed factor
-# when sweeping the flux-uncertainty weighting power instead.
-RECOMMENDED_EDGE_COMPRESSION = 3.16e-7
+# knee, holdout-CV optimum, and 3x3 scatter minimum all landed here, and it was adopted as the
+# pipeline default. Used as the fixed factor when sweeping the flux-uncertainty weighting power.
+RECOMMENDED_EDGE_COMPRESSION = DEFAULT_EDGE_COMPRESSION
 
 # Han & Brandt 2023 Figure 4 swept the weighting power l from 0.4 (prioritizing brighter pixels)
 # to 2.0 (prioritizing dimmer pixels) and adopted the MAD minimum at l = 1.4.

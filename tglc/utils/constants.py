@@ -1,5 +1,9 @@
 """
-Astronomical constants and conversions used by TGLC, mostly related to TESS.
+Astronomical constants, pipeline defaults, and conversions used by TGLC, mostly related to TESS.
+
+The ``DEFAULT_*`` values are the single source of truth for the corresponding `tglc` command line
+defaults, which are declared once per subcommand in `tglc.cli` and would otherwise be repeated as
+literals by the "all" command.
 """
 
 from astropy.coordinates import SkyCoord
@@ -28,11 +32,55 @@ TESS pixel saturation level, from the TESS Instrument Handbook, p37.
 See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
 """
 
+GAIA_DR3_DESIGNATION_PREFIX = "Gaia DR3 "
+"""Prefix of the ``designation`` column in Gaia DR3 catalog tables."""
+
+
+def gaia_dr3_designation(source_id) -> str:
+    """Format a Gaia DR3 source ID as it appears in the catalog ``designation`` column."""
+    return f"{GAIA_DR3_DESIGNATION_PREFIX}{source_id}"
+
+
+DEFAULT_MAX_MAGNITUDE = 13.5
+"""Default main Tmag limit for the TIC query, i.e. the faintest targets TGLC produces."""
+
+DEFAULT_MDWARF_MAGNITUDE = 15.0
+"""Default Tmag limit for the M dwarfs the TIC query admits beyond `DEFAULT_MAX_MAGNITUDE`."""
+
+DEFAULT_CUTOUT_SIZE = 150
+"""Default side length in pixels of the square FFI cutouts the pipeline fits ePSFs to."""
+
+DEFAULT_CUTOUT_OVERLAP = 2
+"""Default overlap in pixels between adjacent cutouts."""
+
+DEFAULT_PSF_SIZE = 11
+"""Default side length in pixels of the square ePSF stamp."""
+
+DEFAULT_PSF_OVERSAMPLE = 2
+"""Default factor by which the ePSF is oversampled relative to image pixels."""
+
 DEFAULT_FILTER_MARGIN = 6.0
 """
 Default extra margin in pixels applied to the star selection window around a cutout,
 admitting halo stars just outside the cutout whose PSF wings overlap it. ~0.5 px beyond
 the 5.5 px half-width of the 11 px ePSF stamp, as headroom for proper motion errors.
+"""
+
+DEFAULT_UNCERTAINTY_POWER = 1.4
+"""
+Default power of the pixel value used as the observational uncertainty in the ePSF fit. <1
+emphasizes contributions from dimmer stars, 1 means all contributions are equal. Determined
+empirically by Han & Brandt 2023 (AJ 165:71) figure 4.
+"""
+
+DEFAULT_EDGE_COMPRESSION = 3.16e-7
+"""
+Default scale factor used when forcing the edges of the ePSF to 0.
+
+Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence, 158.4 s
+effective exposure) with `tglc.scripts.edge_compression_sweep`; see issue #25 and the calibration
+note at the end of the README. The appropriate value scales with the flux units, so other cadences
+rescale as ``(effective exposure / 158.4) ** DEFAULT_UNCERTAINTY_POWER``.
 """
 
 

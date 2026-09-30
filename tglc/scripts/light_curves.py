@@ -20,6 +20,13 @@ from tglc.utils.mapping import iterate_with_progress_bar, pool_map_if_multiproce
 logger = logging.getLogger()
 
 
+_TIC_ID_FILE_COMMENT = re.compile(r"#[^\n]*")
+"""A `#` comment character and the rest of its line in a TIC ID file."""
+
+_TIC_ID_FILE_SEPARATOR = re.compile(r"[,\s]+")
+"""Separator between TIC IDs in a TIC ID file: any mix of whitespace and commas."""
+
+
 def read_tic_id_file(tic_id_file: Path) -> list[int]:
     """
     Read a list of TIC IDs from a text file.
@@ -43,9 +50,9 @@ def read_tic_id_file(tic_id_file: Path) -> list[int]:
     ValueError
         If the file contains an entry that isn't an integer.
     """
-    contents = re.sub(r"#[^\n]*", "", tic_id_file.read_text())
+    contents = _TIC_ID_FILE_COMMENT.sub("", tic_id_file.read_text())
     tic_ids = []
-    for entry in re.split(r"[,\s]+", contents):
+    for entry in _TIC_ID_FILE_SEPARATOR.split(contents):
         if not entry:
             continue
         try:
@@ -99,20 +106,22 @@ def read_source_and_epsf_and_save_light_curves(
     Designed for use with `multiprocessing.Pool.imap_unordered` and a `functools.partial`, so
     unpacks I/O file paths from first argument.
 
-    Returns the subset of `tic_ids` found in this cutout's TIC catalog, so the caller can report
-    requested targets that were never found. Empty when no TIC IDs were requested.
+    Returns the subset of `tic_ids` that had a light curve produced from this cutout, so the caller
+    can report requested targets that never produced one. A requested target in this cutout's TIC
+    catalog is excluded if it has no matching Gaia row or sits too close to a cutout edge. Empty
+    when no TIC IDs were requested.
     """
     source_file, epsf_file = source_and_epsf_files
     source: FFICutout = read_cutout_fits(source_file)
     epsf = read_epsf_fits(epsf_file)
     requested_tic_ids = set(tic_ids) if tic_ids is not None else set()
-    found_tic_ids = []
+    produced_tic_ids = []
     for light_curve in generate_light_curves(
         source, epsf, manifest.ephemerides_directory, tic_ids, max_magnitude
     ):
         tic_id = light_curve.meta["tic_id"]
         if tic_id in requested_tic_ids:
-            found_tic_ids.append(tic_id)
+            produced_tic_ids.append(tic_id)
         manifest.tic_id = tic_id
         if replace or not manifest.light_curve_file.is_file():
             light_curve.write_hdf5(manifest.light_curve_file)
@@ -121,7 +130,7 @@ def read_source_and_epsf_and_save_light_curves(
                 f"Light curve file {manifest.light_curve_file.resolve()} exists and will not be"
                 " overwritten"
             )
-    return found_tic_ids
+    return produced_tic_ids
 
 
 def make_light_curves_main(args: argparse.Namespace):
@@ -134,7 +143,16 @@ def make_light_curves_main(args: argparse.Namespace):
     manifest.ephemerides_directory.mkdir(exist_ok=True)
 
     requested_tic_ids = get_requested_tic_ids(args)
-    found_tic_ids: set[int] = set()
+    produced_tic_ids: set[int] = set()
+
+    # The target selection is the same for every CCD, so describe it once up front.
+    selections = []
+    if args.light_curve_max_magnitude is not None:
+        selections.append(f"targets brighter than TESS magnitude {args.light_curve_max_magnitude}")
+    if requested_tic_ids is not None:
+        selections.append(f"the {len(requested_tic_ids)} requested TIC IDs")
+    if len(selections) > 0:
+        logger.info("Light curves will ONLY be produced for " + ", plus ".join(selections))
 
     for camera, ccd in args.ccd:
         manifest.camera = camera
@@ -159,21 +177,6 @@ def make_light_curves_main(args: argparse.Namespace):
 
         manifest.light_curve_directory.mkdir(exist_ok=True)
 
-        if requested_tic_ids is not None:
-            requested_description = f"{len(requested_tic_ids)} requested TIC IDs"
-            if args.light_curve_max_magnitude is None:
-                logger.info(f"Light curves will ONLY be produced for the {requested_description}")
-            else:
-                logger.info(
-                    "Light curves will ONLY be produced for targets brighter than TESS magnitude "
-                    f"{args.light_curve_max_magnitude}, plus the {requested_description}"
-                )
-        elif args.light_curve_max_magnitude is not None:
-            logger.info(
-                "Light curves will ONLY be produced for targets brighter than TESS magnitude "
-                f"{args.light_curve_max_magnitude}"
-            )
-
         save_light_curves_with_argparse_args = partial(
             read_source_and_epsf_and_save_light_curves,
             manifest=manifest,
@@ -181,7 +184,7 @@ def make_light_curves_main(args: argparse.Namespace):
             tic_ids=requested_tic_ids,
             max_magnitude=args.light_curve_max_magnitude,
         )
-        for cutout_found_tic_ids in iterate_with_progress_bar(
+        for cutout_produced_tic_ids in iterate_with_progress_bar(
             pool_map_if_multiprocessing(
                 save_light_curves_with_argparse_args,
                 ccd_source_and_epsf_files,
@@ -192,15 +195,16 @@ def make_light_curves_main(args: argparse.Namespace):
             unit="cutout",
             total=len(ccd_source_and_epsf_files),
         ):
-            found_tic_ids.update(cutout_found_tic_ids)
+            produced_tic_ids.update(cutout_produced_tic_ids)
 
     if requested_tic_ids is not None:
-        missing_tic_ids = [tic_id for tic_id in requested_tic_ids if tic_id not in found_tic_ids]
+        missing_tic_ids = [tic_id for tic_id in requested_tic_ids if tic_id not in produced_tic_ids]
         if len(missing_tic_ids) > 0:
             logger.warning(
                 f"{len(missing_tic_ids)} of {len(requested_tic_ids)} requested TIC IDs were not "
-                "found in the TIC catalog of any processed cutout (targets outside the processed "
-                "cameras/CCDs, missing from the cutout catalogs, or too close to a cutout edge)"
+                "found in any processed cutout, so no light curves were produced for them "
+                "(targets outside the processed cameras/CCDs, missing from the cutout catalogs, "
+                "or too close to a cutout edge)"
             )
             logger.debug(
                 "Requested TIC IDs with no light curve: " + ", ".join(map(str, missing_tic_ids))

@@ -4,7 +4,17 @@ import argparse
 from pathlib import Path
 
 from tglc import __version__ as tglc_version
-from tglc.utils.constants import DEFAULT_FILTER_MARGIN
+from tglc.utils.constants import (
+    DEFAULT_CUTOUT_OVERLAP,
+    DEFAULT_CUTOUT_SIZE,
+    DEFAULT_EDGE_COMPRESSION,
+    DEFAULT_FILTER_MARGIN,
+    DEFAULT_MAX_MAGNITUDE,
+    DEFAULT_MDWARF_MAGNITUDE,
+    DEFAULT_PSF_OVERSAMPLE,
+    DEFAULT_PSF_SIZE,
+    DEFAULT_UNCERTAINTY_POWER,
+)
 
 
 # Default value for --tglc-data-dir command line argument
@@ -115,27 +125,27 @@ def parse_tglc_args() -> argparse.Namespace:
     all_parser.add_argument(
         "--max-magnitude",
         type=float,
-        default=13.5,
-        help="Main magnitude limit for TIC query",
+        default=DEFAULT_MAX_MAGNITUDE,
+        help=f"Main magnitude limit for TIC query. Default={DEFAULT_MAX_MAGNITUDE}.",
     )
     all_parser.add_argument(
         "--mdwarf-magnitude",
         type=float,
-        default=15.0,
-        help="Magnitude limit for M-dwarfs in TIC query",
+        default=DEFAULT_MDWARF_MAGNITUDE,
+        help=f"Magnitude limit for M-dwarfs in TIC query. Default={DEFAULT_MDWARF_MAGNITUDE}.",
     )
     all_parser.add_argument(
         "-s",
         "--cutout-size",
         type=int,
-        default=150,
-        help="Cutout side length (pixels). Default=150.",
+        default=DEFAULT_CUTOUT_SIZE,
+        help=f"Cutout side length (pixels). Default={DEFAULT_CUTOUT_SIZE}.",
     )
     all_parser.add_argument(
         "--overlap",
         type=int,
-        default=2,
-        help="Overlap between adjacent cutouts (pixels). Default=2.",
+        default=DEFAULT_CUTOUT_OVERLAP,
+        help=f"Overlap between adjacent cutouts (pixels). Default={DEFAULT_CUTOUT_OVERLAP}.",
     )
     all_parser.add_argument(
         "--filter-margin",
@@ -145,32 +155,32 @@ def parse_tglc_args() -> argparse.Namespace:
         f"just outside the cutout whose PSF wings overlap it. Default={DEFAULT_FILTER_MARGIN}.",
     )
     all_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+        "--psf-size",
+        type=int,
+        default=DEFAULT_PSF_SIZE,
+        help=f"Side length in pixels of square PSF. Default={DEFAULT_PSF_SIZE}.",
     )
     all_parser.add_argument(
         "--oversample",
         type=int,
-        default=2,
-        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+        default=DEFAULT_PSF_OVERSAMPLE,
+        help="Factor used to oversample the PSF compared to image pixels. "
+        f"Default={DEFAULT_PSF_OVERSAMPLE}.",
     )
     all_parser.add_argument(
         "--uncertainty-power",
         type=float,
-        default=1.4,
+        default=DEFAULT_UNCERTAINTY_POWER,
         help="Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes "
-        "contributions from dimmer stars, 1 means all contributions are equal. Default=1.4 "
-        "determined empirically.",
+        "contributions from dimmer stars, 1 means all contributions are equal. "
+        f"Default={DEFAULT_UNCERTAINTY_POWER} determined empirically.",
     )
     all_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        # Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence,
-        # 158.4 s effective exposure) with tglc/scripts/edge_compression_sweep.py; see issue #25
-        # and the calibration note at the end of the README. The appropriate value scales with
-        # the flux units, so other cadences rescale as (effective exposure / 158.4)^1.4.
-        default=3.16e-7,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=3.16e-7, determined "
-        "empirically for 200s FFIs.",
+        default=DEFAULT_EDGE_COMPRESSION,
+        help="Scale factor used when forcing edges of ePSF to 0. "
+        f"Default={DEFAULT_EDGE_COMPRESSION}, determined empirically for 200s FFIs.",
     )
     all_parser.add_argument(
         "--no-gpu",
@@ -185,13 +195,16 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     catalogs_parser.add_argument(
-        "--max-magnitude", type=float, default=13.5, help="Main magnitude limit for TIC query"
+        "--max-magnitude",
+        type=float,
+        default=DEFAULT_MAX_MAGNITUDE,
+        help=f"Main magnitude limit for TIC query. Default={DEFAULT_MAX_MAGNITUDE}.",
     )
     catalogs_parser.add_argument(
         "--mdwarf-magnitude",
         type=float,
-        default=15.0,
-        help="Magnitude limit for M-dwarfs in TIC query",
+        default=DEFAULT_MDWARF_MAGNITUDE,
+        help=f"Magnitude limit for M-dwarfs in TIC query. Default={DEFAULT_MDWARF_MAGNITUDE}.",
     )
     catalogs_parser.add_argument("--tic-only", action="store_true", help="Make only TIC catalogs")
     catalogs_parser.add_argument("--gaia-only", action="store_true", help="Make only Gaia catalogs")
@@ -206,14 +219,14 @@ def parse_tglc_args() -> argparse.Namespace:
         "-s",
         "--cutout-size",
         type=int,
-        default=150,
-        help="Cutout side length (pixels). Default=150.",
+        default=DEFAULT_CUTOUT_SIZE,
+        help=f"Cutout side length (pixels). Default={DEFAULT_CUTOUT_SIZE}.",
     )
     cutouts_parser.add_argument(
         "--overlap",
         type=int,
-        default=2,
-        help="Overlap between adjacent cutouts (pixels). Default=2.",
+        default=DEFAULT_CUTOUT_OVERLAP,
+        help=f"Overlap between adjacent cutouts (pixels). Default={DEFAULT_CUTOUT_OVERLAP}.",
     )
     cutouts_parser.add_argument(
         "--filter-margin",
@@ -230,32 +243,32 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     epsfs_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+        "--psf-size",
+        type=int,
+        default=DEFAULT_PSF_SIZE,
+        help=f"Side length in pixels of square PSF. Default={DEFAULT_PSF_SIZE}.",
     )
     epsfs_parser.add_argument(
         "--oversample",
         type=int,
-        default=2,
-        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+        default=DEFAULT_PSF_OVERSAMPLE,
+        help="Factor used to oversample the PSF compared to image pixels. "
+        f"Default={DEFAULT_PSF_OVERSAMPLE}.",
     )
     epsfs_parser.add_argument(
         "--uncertainty-power",
         type=float,
-        default=1.4,
+        default=DEFAULT_UNCERTAINTY_POWER,
         help="Power of pixel value used as observational uncertainty in ePSF fit. <1 emphasizes "
-        "contributions from dimmer stars, 1 means all contributions are equal. Default=1.4 "
-        "determined empirically.",
+        "contributions from dimmer stars, 1 means all contributions are equal. "
+        f"Default={DEFAULT_UNCERTAINTY_POWER} determined empirically.",
     )
     epsfs_parser.add_argument(
         "--edge-compression-factor",
         type=float,
-        # Determined experimentally for 200 s FFIs (TICA cutouts fit in electrons per cadence,
-        # 158.4 s effective exposure) with tglc/scripts/edge_compression_sweep.py; see issue #25
-        # and the calibration note at the end of the README. The appropriate value scales with
-        # the flux units, so other cadences rescale as (effective exposure / 158.4)^1.4.
-        default=3.16e-7,
-        help="Scale factor used when forcing edges of ePSF to 0. Default=3.16e-7, determined "
-        "empirically for 200s FFIs.",
+        default=DEFAULT_EDGE_COMPRESSION,
+        help="Scale factor used when forcing edges of ePSF to 0. "
+        f"Default={DEFAULT_EDGE_COMPRESSION}, determined empirically for 200s FFIs.",
     )
     epsfs_parser.add_argument(
         "--no-gpu",
@@ -310,13 +323,17 @@ def parse_tglc_args() -> argparse.Namespace:
         parents=[command_base_parser],
     )
     migrate_parser.add_argument(
-        "--psf-size", type=int, default=11, help="Side length in pixels of square PSF. Default=11."
+        "--psf-size",
+        type=int,
+        default=DEFAULT_PSF_SIZE,
+        help=f"Side length in pixels of square PSF. Default={DEFAULT_PSF_SIZE}.",
     )
     migrate_parser.add_argument(
         "--oversample",
         type=int,
-        default=2,
-        help="Factor used to oversample the PSF compared to image pixels. Default=2.",
+        default=DEFAULT_PSF_OVERSAMPLE,
+        help="Factor used to oversample the PSF compared to image pixels. "
+        f"Default={DEFAULT_PSF_OVERSAMPLE}.",
     )
     migrate_parser.add_argument(
         "--filter-margin",

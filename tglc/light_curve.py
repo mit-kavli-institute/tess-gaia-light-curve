@@ -17,7 +17,11 @@ from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMeta
 from tglc.aperture_photometry import get_normalized_aperture_photometry
 from tglc.epsf import EPSF
 from tglc.ffi import FFICutout
-from tglc.utils.constants import TESSJD, apply_barycentric_correction  # noqa: F401 for tjd format
+from tglc.utils.constants import (
+    TESSJD,  # noqa: F401 imported to register the tjd time format
+    apply_barycentric_correction,
+    gaia_dr3_designation,
+)
 from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
 
@@ -436,7 +440,7 @@ def generate_light_curves(
             )
             selected_targets |= np.array(
                 [
-                    f"Gaia DR3 {gaia3_id}" in bright_designations
+                    gaia_dr3_designation(gaia3_id) in bright_designations
                     for gaia3_id in tic_match_table["gaia3"]
                 ],
                 dtype=bool,
@@ -477,9 +481,11 @@ def generate_light_curves(
 
     for tic_id, gaia3_id in tic_match_table:
         try:
-            i = np.nonzero(source.gaia["designation"] == f"Gaia DR3 {gaia3_id}")[0][0]
+            i = np.nonzero(source.gaia["designation"] == gaia_dr3_designation(gaia3_id))[0][0]
         except IndexError:
-            logger.debug(f"No Gaia catalog entry found for TIC {tic_id}/Gaia DR3 {gaia3_id}")
+            logger.debug(
+                f"No Gaia catalog entry found for TIC {tic_id}/{gaia_dr3_designation(gaia3_id)}"
+            )
             continue
 
         if not (
