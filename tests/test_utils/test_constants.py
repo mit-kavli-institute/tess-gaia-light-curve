@@ -96,9 +96,11 @@ def test_get_sector_containing_orbit():
     assert get_sector_containing_orbit(211) == 100
     assert get_sector_containing_orbit(225) == 107
     assert get_sector_containing_orbit(226) == 107
+    assert get_sector_containing_orbit(227) == 108
+    assert get_sector_containing_orbit(312) == 150
 
 
-@pytest.mark.parametrize("bad_orbit", [0, -1, 1, 8, 227, 300])
+@pytest.mark.parametrize("bad_orbit", [0, -1, 1, 8])
 def test_get_sector_containing_orbit_with_invalid_orbit(bad_orbit: int):
     with pytest.raises(ValueError):
         get_sector_containing_orbit(bad_orbit)
@@ -144,7 +146,7 @@ def test_get_orbit_midtime_four_orbit_sector():
     assert get_orbit_midtime(204).jd == start + 0.875 * (end - start)
 
 
-@pytest.mark.parametrize("bad_orbit", [0, -1, 8, 227])
+@pytest.mark.parametrize("bad_orbit", [0, -1, 8])
 def test_get_orbit_midtime_with_invalid_orbit(bad_orbit: int):
     with pytest.raises(ValueError):
         get_orbit_midtime(bad_orbit)
@@ -160,6 +162,7 @@ def test_get_orbit_midtime_with_invalid_orbit(bad_orbit: int):
         (98, [205, 206, 207, 208]),
         (99, [209, 210]),
         (107, [225, 226]),
+        (108, [227, 228]),
     ],
 )
 def test_orbits_sector_round_trip(sector: int, orbits: list[int]):

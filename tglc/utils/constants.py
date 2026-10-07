@@ -148,7 +148,7 @@ def get_sector_containing_orbit(orbit: int) -> int:
         return 97
     elif 205 <= orbit <= 208:
         return 98
-    elif 209 <= orbit <= 226:
+    elif orbit >= 209:
         return (orbit - 11) // 2
     else:
         raise ValueError(f"Sector not known for orbit {orbit}")
