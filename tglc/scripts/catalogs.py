@@ -10,7 +10,6 @@ from logging import getLogger
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 import astropy.units as u
-import numba
 import numpy as np
 import pandas as pd
 import sqlalchemy as sa
@@ -41,7 +40,12 @@ GAIA_CATALOG_FIELDS = [
 
 def _get_camera_query_grid_centers(sector: int, camera: int, ccd: int) -> SkyCoord:
     """Get centers of 5deg-radius cones that will cover a CCD FOV in a given sector."""
-    ra, dec, roll = tesswcs.pointings[tesswcs.pointings["Sector"] == sector][0]["RA", "Dec", "Roll"]
+    pointings = tesswcs.pointings[tesswcs.pointings["Sector"] == sector]
+    if len(pointings) == 0:
+        raise ValueError(
+            f"tesswcs {tesswcs.__version__} has no pointing for sector {sector}; upgrade tesswcs"
+        )
+    ra, dec, roll = pointings[0]["RA", "Dec", "Roll"]
     wcs = tesswcs.WCS.predict(ra, dec, roll, camera, ccd, warp=False)
     ccd_rows, ccd_columns = TESS_CCD_SHAPE
     query_center_ccd_x, query_center_ccd_y = np.meshgrid(
@@ -272,7 +276,6 @@ def make_tic_and_gaia_catalogs(
         gaia_results = get_gaia_catalog_data(orbit, camera, ccd, nprocs=nprocs)
         # Positions are propagated to the orbit mid-time here, once for the whole CCD, so
         # downstream cutout code never has to apply proper motions itself.
-        numba.set_num_threads(min(max(nprocs, 1), numba.config.NUMBA_NUM_THREADS))
         propagate_gaia_catalog_for_orbit(gaia_results, orbit)
         write_gaia_catalog_ecsv(gaia_results, manifest.gaia_catalog_file)
     else:

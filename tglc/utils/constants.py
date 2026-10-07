@@ -183,7 +183,10 @@ def get_orbit_midtime(orbit: int) -> Time:
     sector = get_sector_containing_orbit(orbit)
     pointings = tesswcs.pointings[tesswcs.pointings["Sector"] == sector]
     if len(pointings) == 0:
-        raise ValueError(f"tesswcs has no pointing for sector {sector} (orbit {orbit})")
+        raise ValueError(
+            f"tesswcs {tesswcs.__version__} has no pointing for sector {sector} (orbit {orbit});"
+            " upgrade tesswcs"
+        )
     start = float(pointings["Start"][0])
     end = float(pointings["End"][0])
     orbits = get_orbits_in_sector(sector)

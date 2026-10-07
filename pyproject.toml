@@ -23,7 +23,7 @@ dependencies = [
   "pandas",
   "requests",
   "scipy",
-  "tesswcs",
+  "tesswcs>=1.7.3",  # first release with Cycle 9 (sector 108+) pointings
   "tqdm",
 ]
 scripts = { tglc = "tglc.__main__:tglc_main" }
