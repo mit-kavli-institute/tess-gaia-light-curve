@@ -162,7 +162,7 @@ def get_orbits_in_sector(sector: int) -> list[int]:
         return [sector * 2 + 7, sector * 2 + 8, sector * 2 + 9, sector * 2 + 10]
     elif sector == 98:
         return [sector * 2 + 9, sector * 2 + 10, sector * 2 + 11, sector * 2 + 12]
-    elif 99 <= sector <= 107:
+    elif sector >= 99:
         return [sector * 2 + 11, sector * 2 + 12]
     else:
         raise ValueError(f"Orbits not known for sector {sector}")

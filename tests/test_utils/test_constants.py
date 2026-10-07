@@ -112,9 +112,11 @@ def test_get_orbits_in_sector():
     assert get_orbits_in_sector(98) == [205, 206, 207, 208]
     assert get_orbits_in_sector(99) == [209, 210]
     assert get_orbits_in_sector(107) == [225, 226]
+    assert get_orbits_in_sector(108) == [227, 228]
+    assert get_orbits_in_sector(150) == [311, 312]
 
 
-@pytest.mark.parametrize("bad_sector", [0, -1, 108, 150])
+@pytest.mark.parametrize("bad_sector", [0, -1])
 def test_get_orbits_in_sector_with_invalid_sector(bad_sector: int):
     with pytest.raises(ValueError):
         get_orbits_in_sector(bad_sector)
