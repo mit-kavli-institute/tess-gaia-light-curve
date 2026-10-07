@@ -1,5 +1,6 @@
 """Tests for :mod:`tglc.utils.proper_motion`: en-masse Gaia proper-motion propagation."""
 
+import multiprocessing
 import warnings
 
 from astropy.coordinates import SkyCoord
@@ -9,12 +10,14 @@ import astropy.units as u
 from erfa.core import ErfaWarning
 from hypothesis import example, given, settings, strategies as st
 from hypothesis.extra import numpy as npst
+import numba
 import numpy as np
 import pytest
 
 from tglc.utils.constants import get_orbit_midtime
 from tglc.utils.proper_motion import (
     _MAS_YR_TO_RAD,
+    _propagate_unit_vectors,
     catalog_is_propagated,
     load_propagated_gaia_catalog,
     propagate_coordinates,
@@ -318,3 +321,29 @@ def test_load_propagated_gaia_catalog_leaves_new_format_untouched(tmp_path):
     assert loaded.meta["pm_epoch"] == 2026.0
     assert "pm_orbit" not in loaded.meta
     assert path.read_bytes() == content_before
+
+
+def test_propagation_kernel_is_serial():
+    # Under numba's GNU OpenMP threading layer, a forked child that runs a parallel kernel after
+    # the parent has launched its thread pool is terminated. `tglc catalogs` runs this kernel in
+    # forked workers, so it must not be a parallel kernel.
+    assert not _propagate_unit_vectors.targetoptions.get("parallel")
+
+
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method"
+)
+def test_propagation_in_forked_child_after_parent_launches_numba_threads():
+    # Mirrors `tglc catalogs`: the parent has launched numba's thread pool (as eagerly compiling
+    # any parallel kernel at import does) and a forked worker propagates a catalog. With a
+    # parallel kernel on GNU OpenMP the worker is killed and this times out instead of returning.
+    numba.get_num_threads()
+    arguments = ([10.0, 200.0], [-30.0, 45.0], [100.0, -50.0], [20.0, 5.0], 2026.5, 2016.0)
+    expected = propagate_coordinates(*arguments)
+    with warnings.catch_warnings():
+        # Python >= 3.12 warns about forking a multithreaded process; that is the point here.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with multiprocessing.get_context("fork").Pool(1) as pool:
+            ra, dec = pool.apply_async(propagate_coordinates, arguments).get(timeout=60)
+    np.testing.assert_array_equal(ra, expected[0])
+    np.testing.assert_array_equal(dec, expected[1])

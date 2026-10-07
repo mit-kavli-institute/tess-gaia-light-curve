@@ -18,7 +18,7 @@ from pathlib import Path
 
 from astropy.table import QTable, Table
 import astropy.units as u
-from numba import float64, jit, prange
+from numba import float64, jit
 import numpy as np
 
 from tglc.utils.constants import get_orbit_midtime
@@ -37,11 +37,10 @@ _MAS_YR_TO_RAD = np.pi / (180.0 * 3600.0 * 1000.0)
 @jit(
     float64[:, :](float64[:], float64[:], float64[:], float64[:], float64),
     nogil=True,
-    parallel=True,
 )
 def _propagate_unit_vectors(ra_deg, dec_deg, pmra_mas_yr, pmdec_mas_yr, dt_years):
     """
-    Fast JIT-compiled, multithreaded proper-motion propagation of (ra, dec) by dt_years.
+    Fast JIT-compiled proper-motion propagation of (ra, dec) by dt_years.
 
     Each star's unit vector is displaced by dt * (pmra * e_alpha + pmdec * e_delta) — its proper
     motion converted to radians along the local east/north tangent basis — and the direction of
@@ -52,8 +51,12 @@ def _propagate_unit_vectors(ra_deg, dec_deg, pmra_mas_yr, pmdec_mas_yr, dt_years
     of propagated (ra, dec) in degrees, with ra in [0, 360). Stars with zero proper motion (which
     includes stars whose missing proper motions were replaced with 0) pass through bit-exact.
     """
+    # Deliberately serial (no `parallel=True`): this runs inside the forked `tglc catalogs`
+    # workers, and numba's GNU OpenMP threading layer terminates any forked child that runs a
+    # parallel kernel once the parent has launched its thread pool (which eagerly compiling a
+    # parallel kernel at import does). Serial propagation of a full CCD takes well under a second.
     result = np.empty((2, ra_deg.shape[0]))
-    for i in prange(ra_deg.shape[0]):
+    for i in range(ra_deg.shape[0]):
         displacement_ra = pmra_mas_yr[i] * _MAS_YR_TO_RAD * dt_years
         displacement_dec = pmdec_mas_yr[i] * _MAS_YR_TO_RAD * dt_years
         if displacement_ra == 0.0 and displacement_dec == 0.0:
