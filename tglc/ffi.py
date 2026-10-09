@@ -429,8 +429,8 @@ def _get_ffi_header_data_and_flux(
                 # See https://archive.stsci.edu/missions/tess/doc/EXP-TESS-ARC-ICD-TM-0014-Rev-F.pdf?page=56
                 quality = (
                     (primary_header["COARSE"] << 2)
-                    & (primary_header["RW_DESAT"] << 5)
-                    & (primary_header[f"STRAYLT{camera}"] << 11)
+                    | (primary_header["RW_DESAT"] << 5)
+                    | (primary_header[f"STRAYLT{camera}"] << 11)
                 )
                 cadence = primary_header["CADENCE"]
                 time = primary_header["MIDTJD"]
