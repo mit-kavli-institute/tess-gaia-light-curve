@@ -43,7 +43,7 @@ build-backend = "setuptools.build_meta"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["tglc", "tglc.*"]
 
 # Declared explicitly rather than relying on `include-package-data` alone. That setting discovers

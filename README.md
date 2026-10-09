@@ -107,7 +107,7 @@ The unit-test suite (`tests/test_io.py`, `tests/test_utils/`, etc.) does not req
 
 The default `--edge-compression-factor` of `3.16e-7` was **determined experimentally for 200 s
 FFIs** (TICA cutouts fit in electrons per cadence, 158.4 s effective exposure), using the sweep in
-`tglc/scripts/edge_compression_sweep.py` / `edge_compression_figure.py` over all 392 cutouts of
+`src/tglc/scripts/edge_compression_sweep.py` / `edge_compression_figure.py` over all 392 cutouts of
 sector 106 (orbits 223–224). Three independent metrics agree on the value: the knee of the
 residual-image MAD curve, the minimum of a 10%-pixel holdout cross-validation, and the minimum of
 the small-aperture light-curve scatter (see issue #25). It matches upstream TGLC's `1e-4` — which
