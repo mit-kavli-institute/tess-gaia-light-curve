@@ -1,17 +1,21 @@
 """Tests for the :class:`tglc.ffi.FFICutout` wrapper class."""
 
 import inspect
+from pathlib import Path
+import tempfile
 import warnings
 
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 from astropy.table import MaskedColumn
 from astropy.time import Time
 import astropy.units as u
 from erfa.core import ErfaWarning
+from hypothesis import given, strategies as st
 import numpy as np
 import pytest
 
-from tglc.ffi import FFICutout, ffi
+from tglc.ffi import FFICutout, _get_ffi_header_data_and_flux, ffi
 from tglc.utils.constants import DEFAULT_FILTER_MARGIN
 from tglc.utils.proper_motion import propagate_gaia_catalog
 
@@ -350,3 +354,32 @@ def test_init_rejects_unpropagated_catalog():
 
     with pytest.raises(ValueError, match="not proper-motion propagated"):
         make_constructed_cutout(gaia)
+
+
+@given(
+    camera=st.integers(1, 4),
+    coarse=st.booleans(),
+    rw_desat=st.booleans(),
+    stray_light=st.booleans(),
+)
+def test_get_ffi_header_data_and_flux_quality_bits(
+    camera: int, coarse: bool, rw_desat: bool, stray_light: bool
+):
+    """Each TICA quality indicator sets its own FFI quality bit, independently of the others."""
+    header = fits.Header()
+    header["COARSE"] = coarse
+    header["RW_DESAT"] = rw_desat
+    for other_camera in range(1, 5):
+        # Other cameras' stray light must not leak into this camera's flags.
+        header[f"STRAYLT{other_camera}"] = stray_light if other_camera == camera else True
+    header["CADENCE"] = 1234
+    header["MIDTJD"] = 3000.5
+    header["SCIPIXS"] = "[2:4,2:4]"
+    with tempfile.TemporaryDirectory() as directory:
+        ffi_file = Path(directory) / "ffi.fits"
+        fits.PrimaryHDU(data=np.ones((5, 5), dtype=np.float32), header=header).writeto(ffi_file)
+        quality, cadence, time, flux = _get_ffi_header_data_and_flux(ffi_file, camera)
+
+    # A read error returns quality 0 too, so check the file was actually read.
+    assert (cadence, time, flux.shape) == (1234, 3000.5, (3, 3))
+    assert quality == (coarse << 2) | (rw_desat << 5) | (stray_light << 11)
