@@ -310,7 +310,7 @@ def parse_tglc_args() -> argparse.Namespace:
     )
 
     # TEMPORARY command for the retroactive reprocessing campaign (issue #1): remove along with
-    # tglc/scripts/migrate.py when the campaign is complete.
+    # src/tglc/scripts/migrate.py when the campaign is complete.
     migrate_parser = tglc_commands.add_parser(
         "migrate",
         description="TEMPORARY: migrate legacy source pickles and ePSF .npy files to FITS. "
