@@ -5,9 +5,6 @@ This module replaces the older pickle (`.pkl`) and NumPy (`.npy`) formats used
 for FFI cutouts (:class:`tglc.ffi.FFICutout`) and fitted ePSFs. See GitHub
 issue #1 for motivation. The on-disk layouts are documented next to each
 writer function.
-
-Translators are provided to convert legacy products to the new FITS format
-before archival on the MIT TSO servers.
 """
 
 from __future__ import annotations
@@ -16,7 +13,6 @@ from importlib.metadata import PackageNotFoundError, version
 import logging
 import os
 from pathlib import Path
-import pickle
 from typing import TYPE_CHECKING
 import warnings
 
@@ -30,7 +26,7 @@ from astropy.wcs import WCS, FITSFixedWarning
 import numpy as np
 
 from tglc.epsf import EPSF
-from tglc.utils.constants import DEFAULT_FILTER_MARGIN, get_effective_exposure_time_from_sector
+from tglc.utils.constants import get_effective_exposure_time_from_sector
 
 
 if TYPE_CHECKING:
@@ -123,11 +119,10 @@ def _convert_table_to_native_byteorder(table: Table) -> None:
 def _recover_truncated_exposure(exposure: float, sector: int) -> float:
     """Recover the exact effective exposure time from a legacy int-truncated value.
 
-    Cutout files written by older versions (and the pickles they migrate from) stored
-    ``int(EXPTIME)`` — e.g. 158 for TICA's true 158.4-second effective exposure. The exact
-    value is a deterministic function of the sector, so a stored value equal to the truncation
-    of the sector-derived value is promoted back to the exact one. Any other value (including
-    synthetic test values) is returned unchanged.
+    Cutout files written by older versions stored ``int(EXPTIME)`` — e.g. 158 for TICA's true
+    158.4-second effective exposure. The exact value is a deterministic function of the sector,
+    so a stored value equal to the truncation of the sector-derived value is promoted back to the
+    exact one. Any other value (including synthetic test values) is returned unchanged.
     """
     try:
         expected = get_effective_exposure_time_from_sector(sector).to_value(u.second)
@@ -181,8 +176,8 @@ def write_cutout_fits(cutout: FFICutout, path: Path) -> None:
     primary_header["EXPOSURE"] = float(cutout.exposure)
     primary_header["CUTOUTX"] = int(getattr(cutout, "cutout_x", -1))
     primary_header["CUTOUTY"] = int(getattr(cutout, "cutout_y", -1))
-    # Cutouts built before proper-motion propagation (including migrated legacy pickles)
-    # lack the pm epochs; their FITS files are identifiable by the absent keywords.
+    # Cutouts built before proper-motion propagation lack the pm epochs; their FITS files are
+    # identifiable by the absent keywords.
     pm_epoch = getattr(cutout, "pm_epoch", None)
     pm_reference_epoch = getattr(cutout, "pm_reference_epoch", None)
     if pm_epoch is not None and pm_reference_epoch is not None:
@@ -431,168 +426,3 @@ def read_epsf_fits(path: Path) -> EPSF:
         cutout_y=header["CUTOUTY"],
         background_columns=tuple(str(header.get(f"BGCOL{i}", "")) for i in range(n_background)),
     )
-
-
-# ---------------------------------------------------------------------
-# Legacy-format migration
-# ---------------------------------------------------------------------
-
-
-def _default_fits_path(src: Path) -> Path:
-    return src.with_suffix(".fits")
-
-
-def migrate_cutout_pickle(
-    pkl_path: Path,
-    fits_path: Path | None = None,
-    *,
-    gaia_catalog: Table,
-    tic_catalog: Table,
-    cutout_x: int | None = None,
-    cutout_y: int | None = None,
-    filter_margin: float = DEFAULT_FILTER_MARGIN,
-    delete_original: bool = False,
-) -> Path:
-    """Convert a legacy cutout pickle into a FITS file.
-
-    Reads the pickled cutout, re-derives its catalog tables from the full-CCD
-    catalogs, writes the FITS file (atomically), verifies it is readable, and
-    optionally removes the original pickle. The original is only deleted after
-    a successful round-trip read of the new FITS file.
-
-    Legacy pickles carry un-propagated catalog tables without the ``*_ref``
-    columns or the proper-motion epochs, so the tables are rebuilt with
-    :meth:`tglc.ffi.FFICutout.derive_catalogs` — the migrated file is
-    equivalent to a freshly generated cutout (including ``PMEPOCH``/
-    ``PMREFEP``) without re-reading the FFIs.
-
-    Parameters
-    ----------
-    pkl_path : pathlib.Path
-        Path to the legacy ``.pkl`` file produced by older versions of TGLC.
-        Pickles referencing ``tglc.ffi.Source`` still load thanks to the
-        backwards-compat alias kept at the end of :mod:`tglc.ffi`.
-    fits_path : pathlib.Path, optional
-        Output FITS file path. Defaults to ``pkl_path`` with the ``.fits``
-        suffix.
-    gaia_catalog, tic_catalog : astropy.table.QTable
-        Full-CCD Gaia and TIC catalogs matching the cutout's camera/CCD, as
-        read from the ECSV catalog files (see
-        :attr:`tglc.utils.manifest.Manifest.gaia_catalog_file`). The Gaia
-        catalog must be proper-motion propagated (load it with
-        :func:`tglc.utils.proper_motion.load_propagated_gaia_catalog`, which
-        upgrades old-format files). Not modified.
-    cutout_x, cutout_y : int, optional
-        Cutout grid indices to set on the unpickled cutout before writing.
-        Pickles written before these attributes existed carry no record of
-        them, so the FITS header would otherwise get ``CUTOUTX``/``CUTOUTY``
-        of -1. Callers can recover the indices from the legacy file name.
-    filter_margin : float, optional
-        Extra star-selection margin in pixels passed to
-        :meth:`tglc.ffi.FFICutout.derive_catalogs`; recorded in the migrated
-        file's ``FILTMARG`` keyword.
-    delete_original : bool, optional
-        If ``True``, remove ``pkl_path`` after the new FITS file has been
-        verified readable. Defaults to ``False`` so the legacy file is
-        retained unless the caller explicitly opts in.
-
-    Returns
-    -------
-    fits_path : pathlib.Path
-        Path to the written FITS file.
-    """
-    pkl_path = Path(pkl_path)
-    fits_path = Path(fits_path) if fits_path is not None else _default_fits_path(pkl_path)
-
-    with pkl_path.open("rb") as pickle_file:
-        cutout = pickle.load(pickle_file)
-
-    if cutout_x is not None:
-        cutout.cutout_x = cutout_x
-    if cutout_y is not None:
-        cutout.cutout_y = cutout_y
-    # Legacy pickles stored int-truncated TICA EXPTIME values; fix before writing so the
-    # migrated file carries the exact effective exposure.
-    cutout.exposure = _recover_truncated_exposure(float(cutout.exposure), cutout.sector)
-    # Re-deriving a pickle that already carries current-schema tables is idempotent, so
-    # this runs unconditionally.
-    cutout.derive_catalogs(gaia_catalog, tic_catalog, filter_margin=filter_margin)
-
-    write_cutout_fits(cutout, fits_path)
-    read_cutout_fits(fits_path)
-
-    if delete_original:
-        pkl_path.unlink()
-
-    return fits_path
-
-
-def migrate_epsf_npy(
-    npy_path: Path,
-    fits_path: Path | None = None,
-    *,
-    psf_size: int,
-    oversample: int,
-    orbit: int,
-    sector: int,
-    camera: int,
-    ccd: int,
-    cutout_x: int,
-    cutout_y: int,
-    delete_original: bool = False,
-) -> Path:
-    """Convert a legacy ePSF ``.npy`` file into a FITS file.
-
-    Legacy ``.npy`` files carry no metadata, so all FITS header keywords
-    must be supplied by the caller from the surrounding pipeline state
-    (e.g., orbit/camera/ccd from the directory layout, ``psf_size`` and
-    ``oversample`` from the originating ePSF fit configuration).
-
-    Parameters
-    ----------
-    npy_path : pathlib.Path
-        Path to the legacy ``.npy`` file produced by older versions of TGLC.
-    fits_path : pathlib.Path, optional
-        Output FITS file path. Defaults to ``npy_path`` with the ``.fits``
-        suffix.
-    psf_size : int
-        Side length in pixels of the square PSF model the ePSF was fit
-        against. Used to populate the FITS header.
-    oversample : int
-        Factor by which the PSF was oversampled relative to image pixels.
-    orbit, sector, camera, ccd : int
-        TESS identifiers for the originating cutout.
-    cutout_x, cutout_y : int
-        Cutout grid indices matching the originating
-        :class:`FFICutout`'s persisted ``cutout_x`` / ``cutout_y``.
-    delete_original : bool, optional
-        If ``True``, remove ``npy_path`` after the new FITS file has been
-        verified readable. Defaults to ``False``.
-
-    Returns
-    -------
-    fits_path : pathlib.Path
-        Path to the written FITS file.
-    """
-    npy_path = Path(npy_path)
-    fits_path = Path(fits_path) if fits_path is not None else _default_fits_path(npy_path)
-
-    # The EPSF constructor validates the array shape against the supplied configuration.
-    epsf = EPSF(
-        np.load(npy_path),
-        psf_size=psf_size,
-        oversample=oversample,
-        orbit=orbit,
-        sector=sector,
-        camera=camera,
-        ccd=ccd,
-        cutout_x=cutout_x,
-        cutout_y=cutout_y,
-    )
-    write_epsf_fits(epsf, fits_path)
-    read_epsf_fits(fits_path)
-
-    if delete_original:
-        npy_path.unlink()
-
-    return fits_path

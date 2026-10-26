@@ -309,45 +309,6 @@ def parse_tglc_args() -> argparse.Namespace:
         "curves for every target in the cutout's TIC catalog.",
     )
 
-    # TEMPORARY command for the retroactive reprocessing campaign (issue #1): remove along with
-    # src/tglc/scripts/migrate.py when the campaign is complete.
-    migrate_parser = tglc_commands.add_parser(
-        "migrate",
-        description="TEMPORARY: migrate legacy source pickles and ePSF .npy files to FITS. "
-        "Cutout migration re-derives the Gaia/TIC catalog tables from the per-CCD ECSV "
-        "catalogs, which must be on disk (regenerate with 'tglc catalogs' if needed; no FFI "
-        "reads involved). Existing cutout FITS files missing the PMEPOCH keyword (produced "
-        "by the old naive migration), or whose FILTMARG keyword is absent or differs from "
-        "the requested --filter-margin, are re-migrated automatically without --replace.",
-        help="Migrate legacy .pkl/.npy data products to FITS (temporary)",
-        parents=[command_base_parser],
-    )
-    migrate_parser.add_argument(
-        "--psf-size",
-        type=int,
-        default=DEFAULT_PSF_SIZE,
-        help=f"Side length in pixels of square PSF. Default={DEFAULT_PSF_SIZE}.",
-    )
-    migrate_parser.add_argument(
-        "--oversample",
-        type=int,
-        default=DEFAULT_PSF_OVERSAMPLE,
-        help="Factor used to oversample the PSF compared to image pixels. "
-        f"Default={DEFAULT_PSF_OVERSAMPLE}.",
-    )
-    migrate_parser.add_argument(
-        "--filter-margin",
-        type=float,
-        default=DEFAULT_FILTER_MARGIN,
-        help="Extra star-selection margin around each cutout (pixels) used when re-deriving "
-        f"the catalogs; recorded in the FILTMARG keyword. Default={DEFAULT_FILTER_MARGIN}.",
-    )
-    migrate_parser.add_argument(
-        "--delete-original",
-        action="store_true",
-        help="Delete legacy files after the FITS replacement is verified readable",
-    )
-
     args = tglc_parser.parse_args()
 
     # Custom post-parsing logic

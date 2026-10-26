@@ -134,14 +134,6 @@ class Manifest:
         return self.source_directory / f"source_{self.cutout_x}_{self.cutout_y}.fits"
 
     @property
-    def source_file_legacy_pkl(self) -> Path:
-        """Legacy pickle path used before the move to FITS (issue #1).
-
-        Retained so migration helpers can locate old files.
-        """
-        return self.source_directory / f"source_{self.cutout_x}_{self.cutout_y}.pkl"
-
-    @property
     def epsf_directory(self) -> Path:
         """Directory containing ePSF files."""
         return self.ccd_directory / "epsf"
@@ -150,11 +142,6 @@ class Manifest:
     def epsf_file(self) -> Path:
         """ePSF FITS file."""
         return self.epsf_directory / f"epsf_{self.cutout_x}_{self.cutout_y}.fits"
-
-    @property
-    def epsf_file_legacy_npy(self) -> Path:
-        """Legacy NumPy ePSF path used before the move to FITS (issue #1)."""
-        return self.epsf_directory / f"epsf_{self.cutout_x}_{self.cutout_y}.npy"
 
     @property
     def light_curve_directory(self) -> Path:
