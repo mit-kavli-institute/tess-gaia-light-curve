@@ -74,25 +74,29 @@ pip install -e ".[dev]" \
   --extra-index-url https://mit-kavli-institute.github.io/MIT-Kavli-PyPi/
 ```
 
-You now have the `tglc` package and all its dependencies available to use in scripts and notebooks. If you edit the codebase, you can run the tools that are set up for checking the code.
+You now have the `tglc` package and all its dependencies available to use in scripts and notebooks. If you edit the codebase, install the [pre-commit](https://pre-commit.com) hooks so the formatter, linter, spell checker, and type checker run on every commit:
 
 ```shell
-ruff format .  # formatter
-ruff check .  # linter
-pytest  # test suite
+pre-commit install
 ```
+
+[nox](https://nox.thea.codes) runs the same checks that CI runs on pull requests, each in its own environment:
+
+```shell
+nox -l  # list sessions
+nox  # lint (all pre-commit hooks), typecheck (mypy), and tests on Python 3.11 and 3.12
+nox -s tests-3.11 -- tests/test_io.py  # arguments after -- go to pytest
+nox -s build  # build the sdist and wheel, and check the wheel's package data
+```
+
+Or run the tools directly: `ruff format .`, `ruff check .`, `mypy`, `pytest`.
 
 ### End-to-end tests
 
 The end-to-end suite in `tests/end_to_end/` exercises the full pipeline (catalogs → cutouts → ePSFs → light curves) against fake TIC and Gaia databases that are brought up as PostgreSQL containers via `docker compose`, plus a handful of TICA FFIs downloaded from MAST via [pooch](https://www.fatiando.org/pooch/). To run it you need:
 
 - The Docker daemon running locally (Docker Desktop, Colima, or equivalent).
-- `psycopg`'s binary wheel, so libpq does not need to be installed system-wide:
-
-  ```shell
-  pip install "psycopg[binary]"
-  ```
-
+- `psycopg`'s binary wheel (included in the `[dev]` extra), so libpq does not need to be installed system-wide.
 - An internet connection on first run, for `pooch` to fetch the sample FFIs (cached afterward in `tests/sample_data/ffi/`).
 
 With those in place, the e2e tests run as part of the standard `pytest` invocation. They can also be exercised in isolation:
