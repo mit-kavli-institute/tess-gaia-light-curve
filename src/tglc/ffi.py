@@ -438,7 +438,9 @@ def _get_ffi_header_data_and_flux(
                 min_x, max_x, min_y, max_y = _get_science_pixel_limits(primary_header["SCIPIXS"])
                 flux = hdulist[0].data[min_y : max_y + 1, min_x : max_x + 1]
         return (quality, cadence, time, flux)
-    except Exception as e:  # noqa: BLE001 -- one corrupt FFI must not abort the whole orbit
+    # One unreadable FFI must not abort the whole orbit. OSError: missing, empty, or non-FITS file;
+    # ValueError: truncated data or malformed SCIPIXS; KeyError: missing header keyword.
+    except (OSError, ValueError, KeyError) as e:
         logger.warning(f"Invalid FFI file {ffi_file.resolve()}: got error {e}")
         return (0, 0, np.nan, np.full((2048, 2048), np.nan))
 

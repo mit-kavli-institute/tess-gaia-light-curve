@@ -41,7 +41,7 @@ def ccd(arg: str) -> tuple[int, int]:
     try:
         cam_str, ccd_str = arg.split(",")
         cam, ccd = int(cam_str), int(ccd_str)
-    except Exception as e:
+    except ValueError as e:
         raise ValueError(f"Invalid CCD specifier: {arg!r}. Should be 'cam,ccd'.") from e
     if cam not in range(1, 5):
         raise ValueError(f"Invalid camera: {cam}. Must be in [1, 2, 3, 4].")
@@ -55,7 +55,7 @@ def cutout(arg: str) -> tuple[int, int]:
     try:
         cam_str, ccd_str = arg.split(",")
         cam, ccd = int(cam_str), int(ccd_str)
-    except Exception as e:
+    except ValueError as e:
         raise ValueError(f"Invalid cutout specifier: {arg!r}. Should be 'x,y'.") from e
     return cam, ccd
 
