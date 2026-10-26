@@ -88,7 +88,12 @@ extend-select = [
   "UP",  # pyupgrade
   "NPY", # numpy-specific
   "PD",  # pandas-specific
+  "S101", # assert: stripped under `python -O`, so never use it for run-time checks
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+"src/tglc/scripts/migrate.py" = ["S101"]  # `tglc migrate` is slated for removal
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2

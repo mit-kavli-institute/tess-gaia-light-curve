@@ -9,6 +9,9 @@ import os
 from pathlib import Path
 import sys
 
+from hypothesis import given, strategies as st
+import pytest
+
 from tglc import cli
 
 
@@ -103,3 +106,41 @@ def test_lightcurves_tic_file(monkeypatch):
     args = _parse_tglc_args(monkeypatch, "lightcurves", "-o", "185", "--tic-file", "targets.txt")
 
     assert args.tic_file == Path("targets.txt")
+
+
+@given(camera=st.integers(1, 4), ccd=st.integers(1, 4))
+def test_ccd_parses_valid_specifier(camera: int, ccd: int):
+    assert cli.ccd(f"{camera},{ccd}") == (camera, ccd)
+
+
+@given(arg=st.text())
+def test_ccd_rejects_anything_else_with_value_error(arg: str):
+    """argparse turns a ValueError from a `type` callable into a usage error, so nothing else may
+    escape."""
+    try:
+        cam, ccd = cli.ccd(arg)
+    except ValueError:
+        return
+    assert cam in range(1, 5) and ccd in range(1, 5)
+
+
+@given(x=st.integers(0, 20), y=st.integers(0, 20))
+def test_cutout_parses_valid_specifier(x: int, y: int):
+    assert cli.cutout(f"{x},{y}") == (x, y)
+
+
+@given(arg=st.text())
+def test_cutout_rejects_anything_else_with_value_error(arg: str):
+    try:
+        cli.cutout(arg)
+    except ValueError:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("parser", "message"),
+    [(cli.ccd, "Invalid CCD specifier: '1;1'"), (cli.cutout, "Invalid cutout specifier: '1;1'")],
+)
+def test_specifier_error_message_quotes_argument(parser, message: str):
+    with pytest.raises(ValueError, match=message):
+        parser("1;1")

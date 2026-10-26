@@ -383,3 +383,62 @@ def test_get_ffi_header_data_and_flux_quality_bits(
     # A read error returns quality 0 too, so check the file was actually read.
     assert (cadence, time, flux.shape) == (1234, 3000.5, (3, 3))
     assert quality == (coarse << 2) | (rw_desat << 5) | (stray_light << 11)
+
+
+def _write_ffi(path: Path, data=None, **header_overrides) -> None:
+    """Write a minimal TICA-like FFI; a header value of None omits that keyword."""
+    values = {
+        "COARSE": False,
+        "RW_DESAT": False,
+        "STRAYLT1": False,
+        "CADENCE": 1234,
+        "MIDTJD": 3000.5,
+        "SCIPIXS": "[2:4,2:4]",
+        **header_overrides,
+    }
+    header = fits.Header([(key, value) for key, value in values.items() if value is not None])
+    fits.PrimaryHDU(data=data, header=header).writeto(path)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing file",
+        "empty file",
+        "not FITS",
+        "truncated data",
+        "missing keyword",
+        "malformed SCIPIXS",
+    ],
+)
+def test_get_ffi_header_data_and_flux_unreadable_file_returns_nan_frame(
+    tmp_path: Path, corruption: str
+):
+    """Unreadable FFIs are logged and replaced by a NaN frame so one bad file can't abort an orbit."""
+    ffi_file = tmp_path / "ffi.fits"
+    if corruption == "empty file":
+        ffi_file.write_bytes(b"")
+    elif corruption == "not FITS":
+        ffi_file.write_bytes(b"not a FITS file" * 200)
+    elif corruption == "truncated data":
+        _write_ffi(ffi_file, data=np.ones((100, 100), dtype=np.float32))
+        ffi_file.write_bytes(ffi_file.read_bytes()[: 2880 * 2])
+    elif corruption == "missing keyword":
+        _write_ffi(ffi_file, data=np.ones((5, 5), dtype=np.float32), CADENCE=None)
+    elif corruption == "malformed SCIPIXS":
+        _write_ffi(ffi_file, data=np.ones((5, 5), dtype=np.float32), SCIPIXS="garbage")
+
+    quality, cadence, time, flux = _get_ffi_header_data_and_flux(ffi_file, camera=1)
+
+    assert (quality, cadence) == (0, 0)
+    assert np.isnan(time)
+    assert flux.shape == (2048, 2048) and np.isnan(flux).all()
+
+
+def test_get_ffi_header_data_and_flux_raises_for_non_tica_file(tmp_path: Path):
+    """A FITS file that isn't a TICA FFI (here, no primary data) is a bug, not a bad cadence."""
+    ffi_file = tmp_path / "ffi.fits"
+    _write_ffi(ffi_file, data=None)
+
+    with pytest.raises(TypeError):
+        _get_ffi_header_data_and_flux(ffi_file, camera=1)

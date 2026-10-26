@@ -4,6 +4,7 @@ TGLC organizes files in a particular way, and the `Manifest` class helps find th
 
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import cast
 
 from tglc.utils.constants import get_orbits_in_sector, get_sector_containing_orbit
 
@@ -98,8 +99,7 @@ class Manifest:
 
     def _sector_and_orbit_within_sector(self) -> tuple[int, int]:
         """Sector containing the orbit, and the orbit's 1-based index within that sector."""
-        orbit = self.orbit
-        assert orbit is not None  # __getattribute__ raises before returning None
+        orbit = cast(int, self.orbit)  # __getattribute__ raises instead of returning None
         sector = get_sector_containing_orbit(orbit)
         # Assumes orbits in a sector are consecutive
         return sector, orbit - min(get_orbits_in_sector(sector)) + 1

@@ -469,7 +469,9 @@ def main():
         start = time.monotonic()
         try:
             rows = process_cutout(source_path, epsf_path, out_csv, args)
-        except Exception as error:  # noqa: BLE001 -- keep the sweep going; missing CSV marks it for retry
+        # Keep the sweep going past an unreadable or mismatched cutout; its missing CSV marks it
+        # for retry. np.linalg.LinAlgError is a ValueError.
+        except (OSError, ValueError, KeyError) as error:
             logger.error(f"{source_path.name} FAILED: {error}")
             continue
         finally:
