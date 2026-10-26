@@ -9,7 +9,7 @@ files without propagated positions are upgraded transparently by `load_propagate
 which propagates once per CCD and rewrites the file on disk.
 
 This module must stay importable without the ``pyticdb`` extra (no ``tglc.databases`` /
-``tglc.scripts.catalogs`` imports), because ``tglc.ffi`` and ``tglc migrate`` depend on it.
+``tglc.scripts.catalogs`` imports), because ``tglc.ffi`` depends on it.
 """
 
 import logging

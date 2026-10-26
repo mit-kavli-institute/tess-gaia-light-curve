@@ -199,9 +199,8 @@ class FFICutout:
         un-propagated catalog positions at ``pm_reference_epoch``.
 
         Reads only ``wcs``, ``ccd_x``/``ccd_y``, ``size``, and ``sector``
-        from the cutout — never ``flux``/``mask`` — so it is safe to call on
-        an unpickled legacy cutout whose image arrays are already sliced
-        (e.g. during ``tglc migrate``). The input catalogs are not modified.
+        from the cutout — never ``flux``/``mask``. The input catalogs are not
+        modified.
 
         Parameters
         ----------
@@ -226,8 +225,8 @@ class FFICutout:
         self.filter_margin: float | None = float(filter_margin)
 
         # Star positions were propagated to the observation epoch when the catalog was
-        # generated (`tglc catalogs`); both load sites upgrade old-format catalog files
-        # transparently, so this only triggers for callers that bypass them.
+        # generated (`tglc catalogs`); `tglc cutouts` upgrades old-format catalog files
+        # transparently when it loads them, so this only triggers for callers that bypass it.
         if not (
             "ra_ref" in gaia_catalog.colnames
             and "pm_epoch" in gaia_catalog.meta
@@ -235,8 +234,8 @@ class FFICutout:
         ):
             raise ValueError(
                 "Gaia catalog is not proper-motion propagated (old-format ECSV?). Catalog files"
-                " are upgraded automatically when loaded by 'tglc cutouts'/'tglc migrate', or can"
-                " be regenerated with 'tglc catalogs --replace'."
+                " are upgraded automatically when loaded by 'tglc cutouts', or can be"
+                " regenerated with 'tglc catalogs --replace'."
             )
         # None only on cutouts read from files written before proper-motion propagation.
         self.pm_epoch: float | None = float(gaia_catalog.meta["pm_epoch"])
@@ -344,13 +343,9 @@ class FFICutout:
         self.gaia = catalogdata
 
     def __repr__(self) -> str:
-        # Legacy pickles predate the cutout_x/cutout_y attributes, so fall back to the
-        # -1 "not set" sentinel rather than raising.
-        cutout_x = getattr(self, "cutout_x", -1)
-        cutout_y = getattr(self, "cutout_y", -1)
         return (
             f"<{type(self).__name__} orbit-{self.orbit} cam{self.camera}-ccd{self.ccd} "
-            f"cutout ({cutout_x}, {cutout_y}) size={self.size} "
+            f"cutout ({self.cutout_x}, {self.cutout_y}) size={self.size} "
             f"cadences={len(self.time)} gaia={len(self.gaia)} tic={len(self.tic)}>"
         )
 
@@ -680,12 +675,3 @@ def ffi(
         unit="cutout",
         total=len(cutouts),
     )
-
-
-Source = FFICutout
-"""Backwards-compat alias.
-
-Legacy pickle files written before the rename reference ``tglc.ffi.Source`` in
-their class metadata. Keeping this alias allows :func:`tglc.io.migrate_cutout_pickle`
-(and any direct ``pickle.load``) to deserialize those files into the new class.
-"""

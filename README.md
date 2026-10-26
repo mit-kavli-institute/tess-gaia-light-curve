@@ -16,23 +16,22 @@ Install this version of TGLC via pip:
 pip install git+https://github.com/mit-kavli-institute/tess-gaia-light-curve.git
 ```
 
-This will create a `tglc` executable command in your environment. Its subcommands can be listed with `tglc -h`. Four of them correspond to the four steps that TGLC must do to create light curves: download catalogs, create FFI cutouts, fit ePSFs, and extract photometry. `all` runs those four steps in sequence for an orbit, and `migrate` is a temporary command for converting legacy data products (see below). TGLC does not download FFI data; you are responsible for ensuring that data is available in the right location on your system.
+This will create a `tglc` executable command in your environment. Its subcommands can be listed with `tglc -h`. Four of them correspond to the four steps that TGLC must do to create light curves: download catalogs, create FFI cutouts, fit ePSFs, and extract photometry. `all` runs those four steps in sequence for an orbit. TGLC does not download FFI data; you are responsible for ensuring that data is available in the right location on your system.
 
 ```
 $ tglc -h
-usage: tglc [-h] [-V] {all,catalogs,cutouts,epsfs,lightcurves,migrate} ...
+usage: tglc [-h] [-V] {all,catalogs,cutouts,epsfs,lightcurves} ...
 
 TESS-Gaia Light Curve
 
 positional arguments:
-  {all,catalogs,cutouts,epsfs,lightcurves,migrate}
+  {all,catalogs,cutouts,epsfs,lightcurves}
                         TGLC script to run
     all                 Run all TGLC steps for an orbit.
     catalogs            Create cached TIC and Gaia catalogs with data for an orbit.
     cutouts             Create FFI cutouts using catalog data (requires tglc catalogs to be run)
     epsfs               Fit and save ePSFs for FFI cutouts (requires tglc cutouts to be run)
     lightcurves         Create light curves using fitted ePSFs (requires tglc epsfs to be run)
-    migrate             Migrate legacy .pkl/.npy data products to FITS (temporary)
 
 options:
   -h, --help            show this help message and exit
@@ -40,8 +39,6 @@ options:
 ```
 
 Each of the subcommands has additional information available via a similar help message, for example with `tglc cutouts -h`.
-
-`migrate` converts legacy pickle/`.npy` cutout and ePSF files to the FITS formats this version reads. It exists only for the retroactive reprocessing campaign and will be removed once that is complete, so new runs should not need it.
 
 ### Selecting which targets get light curves
 
