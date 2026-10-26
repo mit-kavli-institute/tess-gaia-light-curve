@@ -134,6 +134,9 @@ def _fake_spacecraft_position(orbit, time, ephemerides_directory):
     return np.zeros((len(np.atleast_1d(time.tdb.jd)), 3)) * u.au
 
 
+GOLDEN_RTOL = 1e-12
+
+
 def test_generate_light_curves_characterization(monkeypatch):
     monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
     cutout, epsf = _make_cutout_and_epsf()
@@ -144,10 +147,11 @@ def test_generate_light_curves_characterization(monkeypatch):
     assert [light_curve.meta["tic_id"] for light_curve in light_curves] == [500001, 500002, 500003]
 
     light_curve = light_curves[0]
+    # Floating-point golden values may differ in the last bit between numpy releases.
     np.testing.assert_array_equal(light_curve["time"].value, cutout.time)
     np.testing.assert_array_equal(light_curve["cadence"], cutout.cadence)
     np.testing.assert_array_equal(light_curve["quality_flag"], [0, 0, 0, 0, 0])
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         light_curve["background_flux"],
         [
             -1.6148926257507605,
@@ -156,8 +160,9 @@ def test_generate_light_curves_characterization(monkeypatch):
             -6.499710421265286,
             -8.127983019770129,
         ],
+        rtol=GOLDEN_RTOL,
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         light_curve["primary_aperture_flux"].value,
         [
             1130853.4208847038,
@@ -166,12 +171,14 @@ def test_generate_light_curves_characterization(monkeypatch):
             1130904.391262869,
             1130901.4221197183,
         ],
+        rtol=GOLDEN_RTOL,
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         light_curve["primary_aperture_magnitude"],
         [9.950043598389602, 9.950040327496865, 9.95, 9.949994662659474, 9.949997513219143],
+        rtol=GOLDEN_RTOL,
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         light_curve["primary_aperture_centroid_x"].value,
         [
             45.51360489522273,
@@ -180,8 +187,9 @@ def test_generate_light_curves_characterization(monkeypatch):
             45.490718298902465,
             45.49650680393563,
         ],
+        rtol=GOLDEN_RTOL,
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         light_curve["primary_aperture_centroid_y"].value,
         [
             4.505145996637938,
@@ -190,20 +198,29 @@ def test_generate_light_curves_characterization(monkeypatch):
             4.500872892719402,
             4.495941784997689,
         ],
+        rtol=GOLDEN_RTOL,
     )
     # Small-aperture golden values regenerated after the issue #19 mask fix: the corrected
     # mask flags no cadences here, so the normalization median is taken over all five.
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         light_curve["small_aperture_magnitude"],
         [9.950024273670133, 9.950070957038596, 9.949959578033074, 9.94999189914662, 9.95],
+        rtol=GOLDEN_RTOL,
     )
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         light_curve["large_aperture_magnitude"],
         [9.950031176713066, 9.950022034783288, 9.95, 9.949989191407335, 9.949978838176177],
+        rtol=GOLDEN_RTOL,
     )
-    assert light_curve.meta["primary_aperture_local_background"] == -1129937.174836132 * u.electron
-    assert light_curve.meta["small_aperture_local_background"] == -125549.56932326572 * u.electron
-    assert light_curve.meta["large_aperture_local_background"] == -3138756.963741101 * u.electron
+    assert light_curve.meta["primary_aperture_local_background"].to_value(u.electron) == (
+        pytest.approx(-1129937.174836132, rel=GOLDEN_RTOL)
+    )
+    assert light_curve.meta["small_aperture_local_background"].to_value(u.electron) == (
+        pytest.approx(-125549.56932326572, rel=GOLDEN_RTOL)
+    )
+    assert light_curve.meta["large_aperture_local_background"].to_value(u.electron) == (
+        pytest.approx(-3138756.963741101, rel=GOLDEN_RTOL)
+    )
 
 
 def test_generate_light_curves_tic_ids_filter(monkeypatch):

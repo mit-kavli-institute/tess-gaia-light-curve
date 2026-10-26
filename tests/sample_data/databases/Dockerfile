@@ -1,4 +1,4 @@
-FROM postgres:14-bullseye as pg-base
+FROM postgres:14-bookworm AS pg-base
 
 # Install and set up packages for q3c
 RUN apt-get update \
