@@ -223,7 +223,7 @@ class FFICutout:
             cutout whose PSF wings overlap it. Recorded in the
             ``filter_margin`` attribute (and the ``FILTMARG`` FITS keyword).
         """
-        self.filter_margin = float(filter_margin)
+        self.filter_margin: float | None = float(filter_margin)
 
         # Star positions were propagated to the observation epoch when the catalog was
         # generated (`tglc catalogs`); both load sites upgrade old-format catalog files
@@ -238,8 +238,9 @@ class FFICutout:
                 " are upgraded automatically when loaded by 'tglc cutouts'/'tglc migrate', or can"
                 " be regenerated with 'tglc catalogs --replace'."
             )
-        self.pm_epoch = float(gaia_catalog.meta["pm_epoch"])
-        self.pm_reference_epoch = float(gaia_catalog.meta["pm_reference_epoch"])
+        # None only on cutouts read from files written before proper-motion propagation.
+        self.pm_epoch: float | None = float(gaia_catalog.meta["pm_epoch"])
+        self.pm_reference_epoch: float | None = float(gaia_catalog.meta["pm_reference_epoch"])
 
         # Find relevant stars. `wcs.all_world2pix` on raw ICRS degree arrays is equivalent to
         # `wcs.world_to_pixel` on a SkyCoord (SIP included) without building a full-catalog
@@ -437,7 +438,7 @@ def _get_ffi_header_data_and_flux(
                 min_x, max_x, min_y, max_y = _get_science_pixel_limits(primary_header["SCIPIXS"])
                 flux = hdulist[0].data[min_y : max_y + 1, min_x : max_x + 1]
         return (quality, cadence, time, flux)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- one corrupt FFI must not abort the whole orbit
         logger.warning(f"Invalid FFI file {ffi_file.resolve()}: got error {e}")
         return (0, 0, np.nan, np.full((2048, 2048), np.nan))
 
@@ -515,7 +516,7 @@ def ffi(
     cutout_size : int
         Side length of cutouts (pixels). Large numbers recommended for better quality. Default = 150.
     cutout_overlap : int
-        Overlap between adjecent cutouts cutouts (pixels). Default = 2.
+        Overlap between adjacent cutouts (pixels). Default = 2.
     produce_mask : bool
         Produce CCD mask instead of making cutout :class:`FFICutout` FITS files.
     nprocs : int
@@ -611,7 +612,7 @@ def ffi(
 
     # Mark neighbors of bad pixels as also bad
     bad_y, bad_x = np.nonzero(bad_pixels)
-    for x, y in zip(bad_x, bad_y, strict=False):
+    for x, y in zip(bad_x.tolist(), bad_y.tolist(), strict=False):
         bad_pixels[min(y + 1, 2047), x] = 1
         bad_pixels[max(y - 1, 0), x] = 1
         bad_pixels[y, min(x + 1, 2047)] = 1
@@ -660,7 +661,7 @@ def ffi(
         edge_cutout_size = cutout_size - cutout_overlap
         center_cutout_size = cutout_size - (2 * cutout_overlap)
         num_cutouts = 2 + (2048 - (2 * edge_cutout_size)) // center_cutout_size
-        cutouts = list(product(range(num_cutouts), repeat=2))
+        cutouts = list(product(range(num_cutouts), range(num_cutouts)))
     # TODO remove this comment when the issue is resolved
     # Currently we don't actually do multiprocessing here because the catalogs can't be pickled.
     # There is a problem pickling astropy `MaskedQuantity` objects. There was some progress in

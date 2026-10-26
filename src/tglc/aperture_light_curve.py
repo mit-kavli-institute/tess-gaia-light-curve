@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -62,7 +62,7 @@ class ApertureLightCurveMetadata:
 class ApertureLightCurve(TimeSeries):
     """Aperture light curve."""
 
-    _unordered_required_columns = [
+    _unordered_required_columns: ClassVar[list[str]] = [
         "cadence",
         "quality_flag",
         "background_flux",
@@ -71,7 +71,9 @@ class ApertureLightCurve(TimeSeries):
         for aperture_name in ["primary", "small", "large"]
         for data_name in ["magnitude", "centroid_x", "centroid_y"]
     ]
-    _required_metadata = [field.name for field in fields(ApertureLightCurveMetadata)]
+    _required_metadata: ClassVar[list[str]] = [
+        field.name for field in fields(ApertureLightCurveMetadata)
+    ]
 
     def __init__(self, *args, meta: ApertureLightCurveMetadata | Any = None, **kwargs):
         if isinstance(meta, ApertureLightCurveMetadata):

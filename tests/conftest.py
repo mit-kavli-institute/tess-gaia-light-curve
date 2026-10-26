@@ -50,11 +50,15 @@ def tmp_pyticdb_config(
     # Pyticdb bakes the config location into a lot of things at import time, so the appropriate
     # modules need to be reloaded to force the new config location to take effect. Then, after
     # undoing the monkeypatch, we need to reload again to reset the config location.
+    # `tglc.databases` binds `Databases` at import time too, and is usually imported before this
+    # fixture runs, so it is patched directly; otherwise it reads ~/.config/tic/db.conf.
+    import tglc.databases
+
     try:
         with monkeypatch.context() as m:
-            m.setattr(
-                pyticdb.conn, "Databases", pyticdb.conn.TableReflectionCache(config_dir / "db.conf")
-            )
+            test_databases = pyticdb.conn.TableReflectionCache(config_dir / "db.conf")
+            m.setattr(pyticdb.conn, "Databases", test_databases)
+            m.setattr(tglc.databases, "Databases", test_databases)
             importlib.reload(pyticdb)
             importlib.reload(pyticdb.query)
             yield config_dir
@@ -104,4 +108,3 @@ def pyticdb_database_service(docker_services):
 @pytest.fixture
 def pyticdb_databases(tmp_pyticdb_config, pyticdb_database_service):
     """Pytest fixture that makes all pyticdb databases, plus configuration, available."""
-    pass

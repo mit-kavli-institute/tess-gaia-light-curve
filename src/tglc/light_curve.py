@@ -249,7 +249,7 @@ def get_cutout_for_light_curve(
         Coordinates of target in images.
     target_flux_ratio : float
         Ratio of flux from target star to max flux from any star in the image, according to Gaia
-        catalog data. Used to create a design matrix specifc to the target star.
+        catalog data. Used to create a design matrix specific to the target star.
     cutout_size : int
         Side length of the square cutout in pixels. Cutout may be smaller if target star is near the
         edge of the images.

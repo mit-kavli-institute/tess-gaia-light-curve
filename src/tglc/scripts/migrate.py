@@ -66,7 +66,7 @@ def _existing_fits_is_current(fits_path: Path, kind: str, filter_margin: float) 
         return True
     try:
         header = fits.getheader(fits_path)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- any read failure means "not current"; remigrate it
         return False
     return header.get("PMEPOCH") is not None and header.get("FILTMARG") == float(filter_margin)
 
@@ -158,7 +158,9 @@ def _load_catalogs(manifest: Manifest, camera: int, ccd: int) -> tuple[Path, Pat
         )
         return None
     catalog_files = (manifest.gaia_catalog_file, manifest.tic_catalog_file)
-    _get_catalogs(*catalog_files, manifest.orbit)
+    orbit = manifest.orbit
+    assert orbit is not None  # Manifest.__getattribute__ raises before returning None
+    _get_catalogs(*catalog_files, orbit)
     return catalog_files
 
 
@@ -180,6 +182,8 @@ def _migrate_item(
     """
     try:
         if item.kind == "source":
+            if catalog_files is None:
+                raise ValueError("source cutouts need catalog files")
             gaia_catalog, tic_catalog = _get_catalogs(*catalog_files, orbit)
             # Legacy pickles predate the cutout_x/cutout_y attributes, so supply
             # them from the file name.
@@ -220,7 +224,7 @@ def migrate_main(args: argparse.Namespace):
 
     work_by_ccd = _discover_work(args)
     total = sum(len(items) for items in work_by_ccd.values())
-    results = Counter()
+    results: Counter[str] = Counter()
     with (
         logging_redirect_tqdm(),
         tqdm(

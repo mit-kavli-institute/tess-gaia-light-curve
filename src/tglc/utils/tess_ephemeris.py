@@ -193,7 +193,7 @@ def get_tess_spacecraft_position(
     orbit: int,
     time: Time,
     ephemerides_directory: Path,
-) -> u.Quantity["length"]:  # noqa: F821
+) -> u.Quantity[u.physical.length]:
     """
     Get the TESS spacecraft position relative to the solar system barycenter at given timestamps.
 

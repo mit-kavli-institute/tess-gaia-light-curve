@@ -210,7 +210,7 @@ def test_full_pipeline_with_commands(
     assert len(lc_files) > 0
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:
-            assert "LightCurve" in lc_data.keys()
+            assert "LightCurve" in lc_data
 
 
 def test_full_pipeline_with_all(
@@ -266,7 +266,7 @@ def test_full_pipeline_with_all(
     assert len(lc_files) > 0
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:
-            assert "LightCurve" in lc_data.keys()
+            assert "LightCurve" in lc_data
 
 
 def test_full_pipeline_after_migration(
@@ -404,4 +404,4 @@ def test_full_pipeline_after_migration(
     assert len(lc_files) > 0
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:
-            assert "LightCurve" in lc_data.keys()
+            assert "LightCurve" in lc_data

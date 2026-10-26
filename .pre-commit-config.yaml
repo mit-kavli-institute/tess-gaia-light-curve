@@ -1,0 +1,64 @@
+# See https://learn.scientific-python.org/development/guides/style/
+# Install the git hook with `pre-commit install`; run everything with `nox -s lint`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        exclude: ^tests/sample_data/
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-yaml
+      - id: debug-statements
+      - id: end-of-file-fixer
+        exclude: ^tests/sample_data/  # fixture data is kept byte-for-byte
+      - id: mixed-line-ending
+        exclude: ^tests/sample_data/  # fixture data is kept byte-for-byte
+      - id: trailing-whitespace
+        exclude: ^tests/sample_data/  # fixture data is kept byte-for-byte
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.2
+    hooks:
+      - id: ruff-check
+        args: [--fix, --show-fixes]
+      - id: ruff-format
+
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.27
+    hooks:
+      - id: validate-pyproject
+        additional_dependencies: ["validate-pyproject-schema-store[all]"]
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+
+  - repo: https://github.com/scientific-python/cookie
+    rev: 2026.08.14
+    hooks:
+      - id: sp-repo-review
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.31.1
+    hooks:
+      - id: zizmor
+
+  # Keep the mypy version and stub packages in sync with the `typing` extra in pyproject.toml.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.4.0
+    hooks:
+      - id: mypy
+        files: ^src/
+        args: []
+        additional_dependencies:
+          - astropy
+          - matplotlib
+          - numpy
+          - pandas-stubs
+          - sqlalchemy
+          - types-requests
+          - types-tqdm

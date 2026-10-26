@@ -7,10 +7,11 @@ authors = [
 ]
 dynamic = ["version"]
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 urls = { homepage = "https://github.com/mit-kavli-institute/tess-gaia-light-curve", source = "https://github.com/mit-kavli-institute/tess-gaia-light-curve.git" }
 classifiers = [
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
 requires-python = ">=3.11, <3.13"
@@ -31,10 +32,22 @@ scripts = { tglc = "tglc.__main__:tglc_main" }
 [project.optional-dependencies]
 pyticdb = ["pyticdb"]
 cupy = ["cupy"]
-dev = ["hypothesis", "ruff", "pooch", "pytest", "pytest-docker", "tglc[pyticdb]"]
+# Keep in sync with the mypy hook's `rev` and `additional_dependencies` in .pre-commit-config.yaml.
+typing = ["mypy==2.4.0", "pandas-stubs", "sqlalchemy", "types-requests", "types-tqdm"]
+dev = [
+  "hypothesis",
+  "nox",
+  "pooch",
+  "pre-commit",
+  "psycopg[binary]",  # e2e database fixtures; the binary wheel bundles libpq
+  "pytest",
+  "pytest-docker",
+  "ruff==0.17.2",
+  "tglc[pyticdb,typing]",
+]
 
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
@@ -81,6 +94,39 @@ extend-select = [
 lines-after-imports = 2
 force-sort-within-sections = true
 combine-as-imports = true
+
+[tool.mypy]
+files = ["src"]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[[tool.mypy.overrides]]
+# Optional or untyped third-party packages.
+module = ["astropy.*", "cupy.*", "cupy_backends.*", "h5py.*", "numba.*", "pyticdb.*", "scipy.*", "tesswcs.*"]
+ignore_missing_imports = true
+
+[tool.codespell]
+skip = "*.fits,*.ipynb,tests/sample_data/*"
+ignore-words-list = "te"  # Te Han
+
+[tool.repo-review]
+# Checks from https://learn.scientific-python.org/development/guides/repo-review/ we skip on purpose.
+ignore = [
+  "PP304",  # pytest `log_level` would change caplog levels the logging tests rely on
+  "PY004",  # no docs folder yet; Sphinx + Read the Docs is a follow-up to issue #5
+  "PP004",  # requires-python upper cap is kept until numba/cupy support is verified on 3.13
+  "PP006",  # dev tools stay in the `dev` extra: `pip install .[dev]` is the documented workflow
+  "MY101",  # mypy strict mode is a per-module ratchet after the initial non-strict baseline
+  "PC170",  # PyGrep hooks only matter for reStructuredText, and the repo has none
+  "PC180",  # no markdown formatter; README/tutorials are hand-formatted
+  "PC901",  # PC90x configure pre-commit.ci, which we do not use (CI runs pre-commit itself)
+  "PC902",
+  "PC903",
+]
 
 [tool.uv]
 index = [

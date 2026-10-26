@@ -26,6 +26,7 @@ import csv
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -134,7 +135,7 @@ def make_recommendation(
     exposure: float | None,
 ) -> dict:
     knee_factor = select_largest_within_tolerance(factors, aggregate_in_sample, tolerance)
-    recommendation = {
+    recommendation: dict[str, Any] = {
         "knee_tolerance": tolerance,
         "knee_factor": knee_factor,
         "holdout_min_factor": None,

@@ -95,7 +95,8 @@ def _run_tic_cone_query(
 
     logger.debug(f"Querying Gaia DR2 to DR3 table for stars around {ra=:.2f}, {dec=:.2f}")
     gaia_match_query = tic.select("dr2_to_dr3", "dr2_source_id", "dr3_source_id").where(
-        dr2_to_dr3.c.dr2_source_id == sa.any_(non_null_gaia_dr2_source_ids.tolist())
+        # SQLAlchemy coerces the list to an ARRAY literal at run time; its stubs only admit expressions.
+        dr2_to_dr3.c.dr2_source_id == sa.any_(non_null_gaia_dr2_source_ids.tolist())  # type: ignore[arg-type]
     )
     gaia_match_query_results = tic.execute(gaia_match_query)
     gaia_match = pd.DataFrame(gaia_match_query_results, columns=["dr2_source_id", "dr3_source_id"])

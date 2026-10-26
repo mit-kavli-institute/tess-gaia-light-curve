@@ -136,7 +136,7 @@ def test_load_catalogs_warns_with_catalogs_command(tmp_path: Path, caplog):
 
 
 def test_migrate_main_redoes_stale_fits_without_replace(tmp_path: Path):
-    pkl_path, npy_path = _make_migration_tree(tmp_path)
+    pkl_path, _npy_path = _make_migration_tree(tmp_path)
     # Simulate the old naive migration: a FITS sibling without PMEPOCH (the legacy
     # cutout has no pm attributes, so write_cutout_fits omits the keyword).
     source_fits = pkl_path.with_suffix(".fits")
@@ -163,7 +163,7 @@ def test_migrate_main_skips_current_fits_without_replace(tmp_path: Path):
 
 def test_migrate_main_redoes_fits_with_different_filter_margin(tmp_path: Path):
     """Changing --filter-margin re-migrates existing FITS files without --replace."""
-    pkl_path, npy_path = _make_migration_tree(tmp_path)
+    pkl_path, _npy_path = _make_migration_tree(tmp_path)
     migrate_main(_migrate_args(tmp_path, filter_margin=0.0))
     source_fits = pkl_path.with_suffix(".fits")
     assert fits.getheader(source_fits)["FILTMARG"] == 0.0
