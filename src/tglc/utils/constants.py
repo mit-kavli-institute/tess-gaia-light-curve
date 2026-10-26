@@ -109,6 +109,7 @@ def convert_tess_magnitude_to_tess_flux(magnitude: npt.ArrayLike) -> u.Quantity:
     $$
     See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
     """
+    magnitude = np.asanyarray(magnitude)
     return (15_000 * u.electron / u.second) * 10 ** ((magnitude - 10) / -2.5)
 
 
@@ -231,6 +232,7 @@ def convert_gaia_mags_to_tmag(
     T : MaskedArray
         Converted Tmag values. Masked where `G` input is masked.
     """
+    G, Gbp, Grp = np.asanyarray(G), np.asanyarray(Gbp), np.asanyarray(Grp)
     br_difference = Gbp - Grp
     nominal_conversion = (
         G
@@ -263,9 +265,9 @@ class TESSJD(TimeFromEpoch):
 
 
 def apply_barycentric_correction(
-    tjd: npt.ArrayLike,
+    tjd: Time,
     coord: SkyCoord,
-    spacecraft_position: u.Quantity["length"],  # noqa: F821
+    spacecraft_position: u.Quantity[u.physical.length],
 ) -> Time:
     """
     Apply barycentric time correction to TESS spacecraft timestamps.

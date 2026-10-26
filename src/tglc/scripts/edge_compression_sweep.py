@@ -469,7 +469,7 @@ def main():
         start = time.monotonic()
         try:
             rows = process_cutout(source_path, epsf_path, out_csv, args)
-        except Exception as error:  # keep the sweep going; missing CSV marks it for retry
+        except Exception as error:  # noqa: BLE001 -- keep the sweep going; missing CSV marks it for retry
             logger.error(f"{source_path.name} FAILED: {error}")
             continue
         finally:

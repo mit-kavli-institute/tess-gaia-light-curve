@@ -54,7 +54,7 @@ def read_source_and_fit_and_save_epsf(
         pool_worker_id = -1
 
     if use_gpu and HAS_CUPY:
-        # Figure out which GPU to use, making sure they're evenly disributed
+        # Figure out which GPU to use, making sure they're evenly distributed
         import cupy
 
         if pool_worker_id > 0:

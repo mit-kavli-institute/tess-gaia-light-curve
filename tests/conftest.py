@@ -104,4 +104,3 @@ def pyticdb_database_service(docker_services):
 @pytest.fixture
 def pyticdb_databases(tmp_pyticdb_config, pyticdb_database_service):
     """Pytest fixture that makes all pyticdb databases, plus configuration, available."""
-    pass

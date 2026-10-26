@@ -1,4 +1,4 @@
-"""Command line interface definintion for TGLC."""
+"""Command line interface definition for TGLC."""
 
 import argparse
 from pathlib import Path
@@ -39,10 +39,10 @@ TGLC_DATA_DIR_DEFAULT = get_parent_tglc_data_dir(Path.cwd().expanduser()).resolv
 def ccd(arg: str) -> tuple[int, int]:
     """Parse "cam,ccd" as passed to --ccd. Used as a type for argparse."""
     try:
-        cam, ccd = arg.split(",")
-        cam, ccd = int(cam), int(ccd)
+        cam_str, ccd_str = arg.split(",")
+        cam, ccd = int(cam_str), int(ccd_str)
     except Exception as e:
-        raise ValueError(f"Invalid CCD specifier: {arg:r}. Should be 'cam,ccd'.") from e
+        raise ValueError(f"Invalid CCD specifier: {arg!r}. Should be 'cam,ccd'.") from e
     if cam not in range(1, 5):
         raise ValueError(f"Invalid camera: {cam}. Must be in [1, 2, 3, 4].")
     if ccd not in range(1, 5):
@@ -53,10 +53,10 @@ def ccd(arg: str) -> tuple[int, int]:
 def cutout(arg: str) -> tuple[int, int]:
     """Parse "x,y" as passed to --cutout. Used as a type for argparse."""
     try:
-        cam, ccd = arg.split(",")
-        cam, ccd = int(cam), int(ccd)
+        cam_str, ccd_str = arg.split(",")
+        cam, ccd = int(cam_str), int(ccd_str)
     except Exception as e:
-        raise ValueError(f"Invalid CCD specifier: {arg:r}. Should be 'x,y'.") from e
+        raise ValueError(f"Invalid cutout specifier: {arg!r}. Should be 'x,y'.") from e
     return cam, ccd
 
 
@@ -75,7 +75,7 @@ command_base_parser.add_argument(
     nargs="+",
     help="x,y pairs of cutouts to run. Coordinates are among all cutouts, so --cutout 0,0 specifies "
     "the bottom left cutout and --cutout 13,13 specifies the top right cutout (with default size). "
-    "Multiple argumenst are allowed separated by spaces, like --cutout 1,1 1,2",
+    "Multiple arguments are allowed separated by spaces, like --cutout 1,1 1,2",
 )
 
 _general_options = command_base_parser.add_argument_group("General Options")

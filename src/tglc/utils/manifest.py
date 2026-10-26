@@ -53,7 +53,7 @@ class Manifest:
                 non_null_fields.append((field.name, getattr(self, field.name)))
             except RuntimeError:
                 pass
-        fields_string = ", ".join(f"{name}={repr(value)}" for name, value in non_null_fields)
+        fields_string = ", ".join(f"{name}={value!r}" for name, value in non_null_fields)
         return f"{type(self).__name__}({fields_string})"
 
     @property
@@ -96,24 +96,28 @@ class Manifest:
         """Directory containing full frame images."""
         return self.ccd_directory / "ffi"
 
+    def _sector_and_orbit_within_sector(self) -> tuple[int, int]:
+        """Sector containing the orbit, and the orbit's 1-based index within that sector."""
+        orbit = self.orbit
+        assert orbit is not None  # __getattribute__ raises before returning None
+        sector = get_sector_containing_orbit(orbit)
+        # Assumes orbits in a sector are consecutive
+        return sector, orbit - min(get_orbits_in_sector(sector)) + 1
+
     @property
-    def tica_ffi_file_pattern(self) -> Path:
+    def tica_ffi_file_pattern(self) -> str:
         """
         Glob pattern for TICA FFIs from any cadence, but known orbit, camera, and CCD.
 
         Meant to be used like `manifest.ffi_directory.glob(manifest.tica_ffi_file_pattern)`.
         """
-        sector = get_sector_containing_orbit(self.orbit)
-        # Assumes orbits in a sector are consecutive
-        orbit_within_sector = self.orbit - min(get_orbits_in_sector(sector)) + 1
+        sector, orbit_within_sector = self._sector_and_orbit_within_sector()
         return f"hlsp_tica_tess_ffi_s{sector:04d}-o{orbit_within_sector}-*-cam{self.camera}-ccd{self.ccd}_tess_v01_img.fits"
 
     @property
     def tica_ffi_file(self) -> Path:
         """TICA calibrated full frame image file."""
-        sector = get_sector_containing_orbit(self.orbit)
-        # Assumes orbits in a sector are consecutive
-        orbit_within_sector = self.orbit - min(get_orbits_in_sector(sector)) + 1
+        sector, orbit_within_sector = self._sector_and_orbit_within_sector()
         return (
             self.ffi_directory
             / f"hlsp_tica_tess_ffi_s{sector:04d}-o{orbit_within_sector}-{self.cadence:08d}-cam{self.camera}-ccd{self.ccd}_tess_v01_img.fits"
