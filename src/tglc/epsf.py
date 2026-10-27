@@ -414,16 +414,22 @@ def fit_epsf_for_source(
     return e_psf
 
 
-def get_reference_flux(cutout: "FFICutout") -> float:
+def get_reference_flux(gaia_catalog) -> float:
     """
     Catalog flux in e-/s of a star with flux ratio 1 in a cutout.
 
     The design matrix scales each star by its `tess_flux_ratio` to the brightest catalog star in
     the cutout (see `FFICutout.derive_catalogs`), so fitted PSF amplitudes are in units of this
     star's flux.
+
+    Parameters
+    ----------
+    gaia_catalog : astropy.table.Table
+        The cutout's Gaia catalog (`FFICutout.gaia`), with `tess_mag` and `tess_flux_ratio`
+        columns.
     """
-    flux_ratio = np.asarray(cutout.gaia["tess_flux_ratio"], dtype=np.float64)
-    tess_mag = np.asarray(cutout.gaia["tess_mag"], dtype=np.float64)
+    flux_ratio = np.asarray(gaia_catalog["tess_flux_ratio"], dtype=np.float64)
+    tess_mag = np.asarray(gaia_catalog["tess_mag"], dtype=np.float64)
     i = np.nanargmax(flux_ratio)
     return float(
         convert_tess_magnitude_to_tess_flux(tess_mag[i]).to_value(u.electron / u.second)
@@ -670,7 +676,7 @@ class EPSF:
             ccd=cutout.ccd,
             cutout_x=cutout.cutout_x,
             cutout_y=cutout.cutout_y,
-            reference_flux=get_reference_flux(cutout),
+            reference_flux=get_reference_flux(cutout.gaia),
             exposure=cutout.exposure,
             ccd_x=cutout.ccd_x,
             ccd_y=cutout.ccd_y,

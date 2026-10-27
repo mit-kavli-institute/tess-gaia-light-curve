@@ -178,7 +178,7 @@ class EPSFThroughput:
             raise ValueError(f"ePSF {epsf!r} does not match cutout {cutout!r}")
         return cls(
             epsf,
-            reference_flux=get_reference_flux(cutout) * u.electron / u.second,
+            reference_flux=get_reference_flux(cutout.gaia) * u.electron / u.second,
             exposure_time=cutout.exposure * u.second,
             ccd_x=cutout.ccd_x,
             ccd_y=cutout.ccd_y,
