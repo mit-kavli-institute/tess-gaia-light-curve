@@ -103,6 +103,11 @@ def clone_epsf(template: EPSF, array: np.ndarray) -> EPSF:
         ccd=template.ccd,
         cutout_x=template.cutout_x,
         cutout_y=template.cutout_y,
+        reference_flux=template.reference_flux,
+        exposure=template.exposure,
+        ccd_x=template.ccd_x,
+        ccd_y=template.ccd_y,
+        cutout_size=template.cutout_size,
     )
 
 

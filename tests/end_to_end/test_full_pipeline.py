@@ -11,9 +11,11 @@ import sys
 
 from astropy.table import QTable
 import h5py
+import numpy as np
 import pytest
 
 from tglc.__main__ import tglc_main
+from tglc.epsf_throughput import EPSFThroughput
 from tglc.io import read_cutout_fits, read_epsf_fits
 from tglc.utils.proper_motion import catalog_is_propagated
 
@@ -267,3 +269,11 @@ def test_full_pipeline_with_all(
     for lc_file in lc_files:
         with h5py.File(lc_file) as lc_data:
             assert "LightCurve" in lc_data
+            assert {"ExposureTime", "ZeroPointFlux"} <= lc_data.attrs.keys()
+            assert "fluxportion" in lc_data["LightCurve/AperturePhotometry/PrimaryAperture"].attrs
+
+    # The ePSF throughput is recomputed from the ePSF product alone, not stored.
+    throughput = EPSFThroughput.from_fits(epsf_files[0])
+    corrected = throughput.correct_hdf5(lc_files[0])
+    assert np.nanmedian(corrected["epsf_flux_fraction"]) > 0
+    assert "primary_aperture_flux" in corrected.colnames
