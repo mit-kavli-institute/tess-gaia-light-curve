@@ -272,8 +272,8 @@ def test_full_pipeline_with_all(
             assert {"ExposureTime", "ZeroPointFlux"} <= lc_data.attrs.keys()
             assert "fluxportion" in lc_data["LightCurve/AperturePhotometry/PrimaryAperture"].attrs
 
-    # The ePSF throughput is recomputed from the cutout and ePSF products, not stored.
-    throughput = EPSFThroughput.from_fits(epsf_files[0], source_files[0])
+    # The ePSF throughput is recomputed from the ePSF product alone, not stored.
+    throughput = EPSFThroughput.from_fits(epsf_files[0])
     corrected = throughput.correct_hdf5(lc_files[0])
     assert np.nanmedian(corrected["epsf_flux_fraction"]) > 0
     assert "primary_aperture_flux" in corrected.colnames

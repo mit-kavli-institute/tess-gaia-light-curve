@@ -7,7 +7,8 @@ additively (their good-cadence median is pinned to the catalog-expected flux, se
 invisible in the product.
 
 The factor is a time series, so it is not stored in every light curve file. :class:`EPSFThroughput`
-recomputes it on demand from the ePSF and cutout data products and divides it out of the
+recomputes it on demand from the ePSF data product alone (which records the reference flux,
+exposure, and cutout origin; older ePSF files also need their cutout) and divides it out of the
 background-offset flux and magnitude.
 
 Because each star's design-matrix contribution is scaled by its catalog flux ratio to the
@@ -24,8 +25,7 @@ import h5py
 import numpy as np
 
 from tglc.aperture_light_curve import ApertureLightCurve
-from tglc.aperture_photometry import get_expected_total_flux
-from tglc.epsf import EPSF
+from tglc.epsf import EPSF, get_reference_flux
 from tglc.ffi import FFICutout
 from tglc.io import read_cutout_fits, read_epsf_fits
 from tglc.light_curve import LIGHT_CURVE_APERTURES
@@ -61,7 +61,7 @@ class EPSFThroughput:
         self,
         epsf: EPSF,
         *,
-        reference_tmag: float,
+        reference_flux: u.Quantity,
         exposure_time: u.Quantity,
         ccd_x: int,
         ccd_y: int,
@@ -71,9 +71,9 @@ class EPSFThroughput:
         ----------
         epsf : EPSF
             Fitted ePSF for one cutout.
-        reference_tmag : float
-            TESS magnitude of the star with flux ratio 1 (the brightest catalog star) in the
-            cutout the ePSF was fit for.
+        reference_flux : u.Quantity (e-/s)
+            Catalog flux of the star with flux ratio 1 (the brightest catalog star) in the cutout
+            the ePSF was fit for; see `tglc.epsf.get_reference_flux`.
         exposure_time : u.Quantity (time)
             Exposure time per cadence of the cutout.
         ccd_x, ccd_y : int
@@ -81,21 +81,63 @@ class EPSFThroughput:
             frame.
         """
         self.epsf = epsf
-        self.reference_tmag = float(reference_tmag)
+        self.reference_flux = u.Quantity(reference_flux, u.electron / u.second)
         self.exposure_time = u.Quantity(exposure_time, u.second)
         self.ccd_x = int(ccd_x)
         self.ccd_y = int(ccd_y)
 
     def __repr__(self) -> str:
         return (
-            f"<{type(self).__name__} {self.epsf!r} reference_tmag={self.reference_tmag} "
+            f"<{type(self).__name__} {self.epsf!r} reference_flux={self.reference_flux} "
             f"exposure_time={self.exposure_time}>"
+        )
+
+    @classmethod
+    def from_epsf(cls, epsf: EPSF) -> "EPSFThroughput":
+        """
+        Make the throughput wrapper from an ePSF alone, using the scalars recorded with it.
+
+        Raises
+        ------
+        ValueError
+            If the ePSF predates the recorded reference flux, exposure, and cutout origin; use
+            :meth:`from_cutout` for those.
+        """
+        reference_flux, exposure, ccd_x, ccd_y = (
+            epsf.reference_flux,
+            epsf.exposure,
+            epsf.ccd_x,
+            epsf.ccd_y,
+        )
+        if reference_flux is None or exposure is None or ccd_x is None or ccd_y is None:
+            missing = [
+                name
+                for name, value in [
+                    ("reference_flux", reference_flux),
+                    ("exposure", exposure),
+                    ("ccd_x", ccd_x),
+                    ("ccd_y", ccd_y),
+                ]
+                if value is None
+            ]
+            raise ValueError(
+                f"ePSF {epsf!r} does not record {', '.join(missing)}; "
+                "pass the cutout it was fit for (EPSFThroughput.from_cutout)"
+            )
+        return cls(
+            epsf,
+            reference_flux=reference_flux * u.electron / u.second,
+            exposure_time=exposure * u.second,
+            ccd_x=ccd_x,
+            ccd_y=ccd_y,
         )
 
     @classmethod
     def from_cutout(cls, epsf: EPSF, cutout: FFICutout) -> "EPSFThroughput":
         """
         Make the throughput wrapper for an ePSF and the cutout it was fit for.
+
+        Needed only for ePSFs that predate the recorded scalars (see :meth:`from_epsf`).
 
         Raises
         ------
@@ -104,27 +146,30 @@ class EPSFThroughput:
         """
         if not epsf.matches_cutout(cutout):
             raise ValueError(f"ePSF {epsf!r} does not match cutout {cutout!r}")
-        flux_ratio = np.asarray(cutout.gaia["tess_flux_ratio"], dtype=np.float64)
-        reference_tmag = np.asarray(cutout.gaia["tess_mag"], dtype=np.float64)[
-            np.nanargmax(flux_ratio)
-        ]
         return cls(
             epsf,
-            reference_tmag=reference_tmag,
+            reference_flux=get_reference_flux(cutout) * u.electron / u.second,
             exposure_time=cutout.exposure * u.second,
             ccd_x=cutout.ccd_x,
             ccd_y=cutout.ccd_y,
         )
 
     @classmethod
-    def from_fits(cls, epsf_path: Path, cutout_path: Path) -> "EPSFThroughput":
-        """Make the throughput wrapper from ePSF and cutout FITS files."""
-        return cls.from_cutout(read_epsf_fits(epsf_path), read_cutout_fits(cutout_path))
+    def from_fits(cls, epsf_path: Path, cutout_path: Path | None = None) -> "EPSFThroughput":
+        """
+        Make the throughput wrapper from an ePSF FITS file.
+
+        The cutout FITS file is needed only for ePSF files that predate the recorded scalars.
+        """
+        epsf = read_epsf_fits(epsf_path)
+        if cutout_path is None:
+            return cls.from_epsf(epsf)
+        return cls.from_cutout(epsf, read_cutout_fits(cutout_path))
 
     @property
-    def reference_flux(self) -> float:
-        """Catalog-expected flux in electrons per cadence of a star with flux ratio 1."""
-        return get_expected_total_flux(self.reference_tmag, self.exposure_time.to_value(u.second))
+    def reference_flux_per_cadence(self) -> float:
+        """Catalog flux in electrons per cadence of a star with flux ratio 1."""
+        return (self.reference_flux * self.exposure_time).to_value(u.electron)
 
     def flux_fraction(self, x: float, y: float) -> np.ndarray:
         """
@@ -156,7 +201,9 @@ class EPSFThroughput:
         )
         # Summing the design matrix over pixels first gives each PSF node's total weight, so the
         # per-cadence model total is a single matrix-vector product.
-        return self.epsf.psf_parameters @ design_matrix.sum(axis=0) / self.reference_flux
+        return (
+            self.epsf.psf_parameters @ design_matrix.sum(axis=0) / self.reference_flux_per_cadence
+        )
 
     def flux_fraction_at_ccd(self, ccd_x: float, ccd_y: float) -> np.ndarray:
         """:meth:`flux_fraction` for a star at a CCD position (as in light curve metadata)."""

@@ -15,8 +15,9 @@ from tglc.aperture_photometry import (
     get_flux_portion_in_aperture,
     measure_aperture_flux,
 )
-from tglc.epsf import EPSF
+from tglc.epsf import EPSF, get_reference_flux
 from tglc.epsf_throughput import EPSFThroughput, read_hdf5_offset_flux
+from tglc.io import write_epsf_fits
 from tglc.light_curve import (
     LIGHT_CURVE_APERTURES,
     evaluate_epsf_model,
@@ -31,6 +32,7 @@ from .synthetic_data import make_synthetic_cutout, make_synthetic_epsf
 
 PSF_SIZE = 11
 OVERSAMPLE = 2
+REFERENCE_FLUX = 15_000 * u.electron / u.second
 
 
 def _make_epsf(array: np.ndarray, **overrides) -> EPSF:
@@ -60,10 +62,62 @@ def _fake_spacecraft_position(orbit, time, ephemerides_directory):
 def test_from_cutout_uses_brightest_star_and_cutout_scalars():
     cutout, epsf = _make_cutout_and_epsf()
     throughput = EPSFThroughput.from_cutout(epsf, cutout)
-    assert throughput.reference_tmag == 9.95
     assert throughput.exposure_time == 200 * u.second
     assert (throughput.ccd_x, throughput.ccd_y) == (44, 0)
-    assert throughput.reference_flux == pytest.approx(get_expected_total_flux(9.95, 200))
+    assert throughput.reference_flux_per_cadence == pytest.approx(
+        get_expected_total_flux(9.95, 200)
+    )
+
+
+def test_get_reference_flux_is_flux_ratio_one_catalog_flux():
+    cutout, _ = _make_cutout_and_epsf()
+    # Any star's catalog flux divided by its flux ratio gives the same reference flux.
+    for tess_mag, flux_ratio in zip(
+        cutout.gaia["tess_mag"], cutout.gaia["tess_flux_ratio"], strict=True
+    ):
+        assert get_reference_flux(cutout) == pytest.approx(
+            get_expected_total_flux(tess_mag, 1.0) / flux_ratio, rel=1e-12
+        )
+
+
+def test_from_epsf_matches_from_cutout_for_fitted_epsf():
+    cutout, _ = _make_cutout_and_epsf()
+    cutout.flux = cutout.flux.astype(np.float64)
+    epsf = EPSF.from_cutout_fit(
+        cutout,
+        psf_size=PSF_SIZE,
+        oversample=OVERSAMPLE,
+        edge_compression_factor=1e-6,
+        flux_uncertainty_power=1.4,
+        use_gpu=False,
+    )
+    assert epsf.reference_flux == get_reference_flux(cutout)
+    assert (epsf.exposure, epsf.ccd_x, epsf.ccd_y) == (200, 44, 0)
+    x, y = cutout.star_positions[0]
+    np.testing.assert_array_equal(
+        EPSFThroughput.from_epsf(epsf).flux_fraction(x, y),
+        EPSFThroughput.from_cutout(epsf, cutout).flux_fraction(x, y),
+    )
+
+
+def test_from_epsf_rejects_epsf_without_recorded_scalars():
+    _, epsf = _make_cutout_and_epsf()
+    with pytest.raises(ValueError, match="does not record reference_flux, exposure, ccd_x, ccd_y"):
+        EPSFThroughput.from_epsf(epsf)
+
+
+def test_from_fits_needs_only_the_epsf_file(tmp_path):
+    cutout, epsf = _make_cutout_and_epsf()
+    recorded = _make_epsf(
+        epsf.array, reference_flux=get_reference_flux(cutout), exposure=200, ccd_x=44, ccd_y=0
+    )
+    write_epsf_fits(recorded, tmp_path / "epsf.fits")
+    x, y = cutout.star_positions[2]
+    np.testing.assert_allclose(
+        EPSFThroughput.from_fits(tmp_path / "epsf.fits").flux_fraction(x, y),
+        EPSFThroughput.from_cutout(epsf, cutout).flux_fraction(x, y),
+        rtol=1e-15,
+    )
 
 
 def test_from_cutout_rejects_mismatched_epsf():
@@ -110,7 +164,7 @@ def test_flux_fraction_keeps_half_pixel_footprint(psf_size, position):
         cutout_x=0, cutout_y=0,
     )  # fmt: skip
     throughput = EPSFThroughput(
-        epsf, reference_tmag=10.0, exposure_time=200 * u.second, ccd_x=0, ccd_y=0
+        epsf, reference_flux=REFERENCE_FLUX, exposure_time=200 * u.second, ccd_x=0, ccd_y=0
     )
     x, y = position
     shift = 20
@@ -122,7 +176,7 @@ def test_flux_fraction_keeps_half_pixel_footprint(psf_size, position):
     )
     np.testing.assert_allclose(
         throughput.flux_fraction(x, y),
-        target_model.sum(axis=(1, 2)) / throughput.reference_flux,
+        target_model.sum(axis=(1, 2)) / throughput.reference_flux_per_cadence,
         rtol=1e-12,
     )
 
@@ -139,10 +193,16 @@ def test_flux_fraction_of_flat_psf_counts_whole_footprint(x, y, level):
     array = np.zeros((2, EPSF.parameter_count(PSF_SIZE, OVERSAMPLE)))
     array[:, : (PSF_SIZE * OVERSAMPLE + 1) ** 2] = level
     throughput = EPSFThroughput(
-        _make_epsf(array), reference_tmag=10.0, exposure_time=200 * u.second, ccd_x=0, ccd_y=0
+        _make_epsf(array),
+        reference_flux=REFERENCE_FLUX,
+        exposure_time=200 * u.second,
+        ccd_x=0,
+        ccd_y=0,
     )
     np.testing.assert_allclose(
-        throughput.flux_fraction(x, y), level * PSF_SIZE**2 / throughput.reference_flux, rtol=1e-12
+        throughput.flux_fraction(x, y),
+        level * PSF_SIZE**2 / throughput.reference_flux_per_cadence,
+        rtol=1e-12,
     )
 
 
@@ -154,7 +214,12 @@ def test_flux_fraction_of_flat_psf_counts_whole_footprint(x, y, level):
 )
 def test_flux_fraction_is_linear_in_psf_parameters(x, y, scale):
     _, epsf = _make_cutout_and_epsf()
-    kwargs = {"reference_tmag": 10.0, "exposure_time": 200 * u.second, "ccd_x": 0, "ccd_y": 0}
+    kwargs = {
+        "reference_flux": REFERENCE_FLUX,
+        "exposure_time": 200 * u.second,
+        "ccd_x": 0,
+        "ccd_y": 0,
+    }
     scaled_epsf = _make_epsf(epsf.array * scale)
     np.testing.assert_allclose(
         EPSFThroughput(scaled_epsf, **kwargs).flux_fraction(x, y),
