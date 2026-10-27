@@ -254,7 +254,10 @@ def get_normalized_aperture_photometry(
         - `"{column_name_prefix}centroid_y"`: Y coordinate in image of flux-weighted aperture centroid
 
         Metadata:
-        - `"local_background"`: Local background flux level used in normalization.
+        - `"{column_name_prefix}local_background"`: Local background flux level used in
+          normalization.
+        - `"{column_name_prefix}flux_portion"`: Portion of the target's flux falling in the
+          aperture, used to convert the normalized aperture flux to magnitude.
     """
     aperture_limits = get_aperture_limits(aperture_size, x, y, images.shape[1], images.shape[2])
     exposure_time_seconds = exposure_time.to_value(u.second)
@@ -284,7 +287,10 @@ def get_normalized_aperture_photometry(
             f"{column_name_prefix}centroid_x": centroids[:, 1],
             f"{column_name_prefix}centroid_y": centroids[:, 0],
         },
-        meta={f"{column_name_prefix}local_background": local_background},
+        meta={
+            f"{column_name_prefix}local_background": local_background,
+            f"{column_name_prefix}flux_portion": float(flux_portion_in_aperture),
+        },
     )
 
     return table
