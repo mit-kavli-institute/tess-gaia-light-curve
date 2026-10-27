@@ -559,6 +559,15 @@ def generate_light_curves(
             large_aperture_local_background=aperture_photometry_data[2].meta[
                 "large_aperture_local_background"
             ],
+            primary_aperture_flux_portion=aperture_photometry_data[0].meta[
+                "primary_aperture_flux_portion"
+            ],
+            small_aperture_flux_portion=aperture_photometry_data[1].meta[
+                "small_aperture_flux_portion"
+            ],
+            large_aperture_flux_portion=aperture_photometry_data[2].meta[
+                "large_aperture_flux_portion"
+            ],
         )
 
         base_light_curve = QTable(

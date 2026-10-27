@@ -59,6 +59,28 @@ tglc lightcurves -o 223 --max-magnitude 10 --tic-file targets.txt
 
 Note that the `all` command's `--max-magnitude` applies to the TIC query only. It is deliberately not reapplied to the light curve step, which would otherwise drop the M dwarfs admitted by `--mdwarf-magnitude`.
 
+### Absolute photometry and the ePSF throughput
+
+Light curves are normalized additively: each aperture's flux is shifted so its good-cadence median lands on the flux expected from the target's catalog TESS magnitude. The HDF5 files record only the timeless scalars needed to undo that shift:
+
+- `ExposureTime` and `ZeroPointFlux` (file attributes): seconds per cadence, and the e⁻/s of a Tmag 10 star used for the magnitude conversion.
+- `localbackground` and `fluxportion` (attributes of each `AperturePhotometry/*Aperture` group): the subtracted offset in electrons, and the portion of the target's flux in the aperture.
+
+The un-normalized aperture flux in electrons is `fluxportion * ExposureTime * ZeroPointFlux * 10 ** (-0.4 * (RawMagnitude - 10)) + localbackground`.
+
+The ePSF fit also absorbs the optical throughput loss multiplicatively, increasingly so toward the camera edge. That factor is a time series, so it is not stored. Recompute it from the cutout and ePSF products and divide it out of the offset flux and magnitude:
+
+```python
+from tglc.epsf_throughput import EPSFThroughput
+
+throughput = EPSFThroughput.from_fits("epsf/epsf_0_0.fits", "source/source_0_0.fits")
+corrected = throughput.correct_hdf5(
+    "LC/123456789.h5"
+)  # epsf_flux_fraction plus corrected magnitude and flux
+```
+
+`EPSFThroughput.correct_light_curve` does the same for an in-memory `ApertureLightCurve`. The flux fraction is the target-only ePSF model summed over the full PSF footprint, divided by the target's catalog-expected flux. It depends on the cutout and cadence, not on the target's magnitude.
+
 ## Development
 
 If you want to work directly with this code base, clone the repository, create a virtual environment, and install the project in editable mode. The `[dev]` extra pulls in `pyticdb`, which lives on the MIT-Kavli PyPI index, so the index needs to be passed to `pip` with `--extra-index-url`.
