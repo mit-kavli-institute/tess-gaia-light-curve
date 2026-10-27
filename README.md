@@ -65,25 +65,30 @@ Light curves are normalized additively: each aperture's flux is shifted so its g
 
 - `ExposureTime` and `ZeroPointFlux` (file attributes): seconds per cadence, and the e⁻/s of a Tmag 10 star used for the magnitude conversion.
 - `localbackground` and `fluxportion` (attributes of each `AperturePhotometry/*Aperture` group): the subtracted offset in electrons, and the portion of the target's flux in the aperture.
+- `CutoutX` and `CutoutY` (file attributes): the grid indices of the cutout the light curve came from, which identify its ePSF.
 
 The un-normalized aperture flux in electrons is `fluxportion * ExposureTime * ZeroPointFlux * 10 ** (-0.4 * (RawMagnitude - 10)) + localbackground`.
 
-The ePSF fit also absorbs the optical throughput loss multiplicatively, increasingly so toward the camera edge. That factor is a time series, so it is not stored. Recompute it from the ePSF product, which records the scalars it needs in its header, and divide it out of the offset flux and magnitude:
+The ePSF fit also absorbs the optical throughput loss multiplicatively, increasingly so toward the camera edge. Because the normalization pins the median to the catalog flux, the median throughput deficit ends up folded into `localbackground`. The correction therefore divides the flux fraction out of the **un-normalized** flux. Dividing it out of the normalized flux would count the deficit twice.
+
+The flux fraction is a time series, so it is not stored. It is recomputed from the ePSF product, which records the scalars it needs in its header:
 
 - `REFFLUX`: the catalog flux in e⁻/s of the cutout's brightest catalog star, which has flux ratio 1. The fitted PSF amplitudes are in units of this flux.
 - `EXPOSURE`: the exposure time in seconds.
-- `CCDX`/`CCDY`: the cutout origin on the CCD.
+- `CCDX`/`CCDY` and `CUTSIZE`: the cutout origin on the CCD and its side length.
 
 ```python
 from tglc.epsf_throughput import EPSFThroughput
 
 throughput = EPSFThroughput.from_fits("epsf/epsf_0_0.fits")
-corrected = throughput.correct_hdf5(
-    "LC/123456789.h5"
-)  # epsf_flux_fraction plus corrected magnitude and flux
+corrected = throughput.correct_hdf5("LC/123456789.h5")
 ```
 
-`EPSFThroughput.correct_light_curve` does the same for an in-memory `ApertureLightCurve`. ePSF files written before these keywords existed also need their cutout: `EPSFThroughput.from_fits(epsf_path, cutout_path)`. The flux fraction is the target-only ePSF model summed over the full PSF footprint, divided by the target's catalog-expected flux. It depends on the cutout and cadence, not on the target's magnitude.
+`corrected` has `time`, `cadence`, `quality_flag`, `background_flux` and `epsf_flux_fraction` columns. It also has, per aperture, the corrected flux (`raw_flux / epsf_flux_fraction`, in electrons) and the TESS magnitude that flux implies for the whole star. Both methods refuse a light curve that wasn't extracted from the ePSF's cutout. `EPSFThroughput.correct_light_curve` does the same for an in-memory `ApertureLightCurve`.
+
+ePSF files written before these keywords existed also need their cutout: `EPSFThroughput.from_fits(epsf_path, cutout_path)`.
+
+The flux fraction is the target-only ePSF model summed over the full PSF footprint, divided by the target's catalog-expected flux. It depends on the cutout and cadence, not on the target's magnitude.
 
 ## Development
 

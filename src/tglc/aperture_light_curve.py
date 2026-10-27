@@ -14,6 +14,10 @@ import numpy as np
 from tglc.utils.constants import TESS_ZERO_POINT_FLUX, TESSJD
 
 
+LIGHT_CURVE_APERTURES = (("primary", 3), ("small", 1), ("large", 5))
+"""(name, side length) of the square apertures extracted for every light curve."""
+
+
 @dataclass
 class ApertureLightCurveMetadata:
     """Metadata for an aperture light curve."""
@@ -32,6 +36,12 @@ class ApertureLightCurveMetadata:
 
     ccd: int
     """CCD containing target star."""
+
+    cutout_x: int
+    """Grid index along x of the FFI cutout the light curve was extracted from."""
+
+    cutout_y: int
+    """Grid index along y of the FFI cutout the light curve was extracted from."""
 
     ccd_x: float
     """X coordinate on CCD of target star (projected from Gaia coordinates)."""
@@ -77,7 +87,7 @@ class ApertureLightCurve(TimeSeries):
         "background_flux",
     ] + [
         f"{aperture_name}_aperture_{data_name}"
-        for aperture_name in ["primary", "small", "large"]
+        for aperture_name, _ in LIGHT_CURVE_APERTURES
         for data_name in ["magnitude", "centroid_x", "centroid_y"]
     ]
     _required_metadata: ClassVar[list[str]] = [
@@ -111,6 +121,8 @@ class ApertureLightCurve(TimeSeries):
         timeless scalars are added to make the additive normalization invertible, so the file
         does not grow by a time series:
 
+        - `CutoutX`, `CutoutY` (file attributes): grid indices of the FFI cutout the light curve
+          was extracted from, identifying the matching ePSF.
         - `ExposureTime` (file attribute): exposure time per cadence in seconds.
         - `ZeroPointFlux` (file attribute): flux in e-/s of a TESS magnitude 10 star used for the
           magnitude conversion.
@@ -139,6 +151,8 @@ class ApertureLightCurve(TimeSeries):
             file.attrs["Dec"] = self.meta["sky_coord"].dec.deg
             file.attrs["BJDoffset"] = TESSJD.epoch_val.to(u.day)
             file.attrs["TessMag"] = self.meta["tess_magnitude"]
+            file.attrs["CutoutX"] = self.meta["cutout_x"]
+            file.attrs["CutoutY"] = self.meta["cutout_y"]
             file.attrs["ExposureTime"] = self.meta["exposure_time"].to_value(u.second)
             file.attrs["ZeroPointFlux"] = TESS_ZERO_POINT_FLUX.to_value(u.electron / u.second)
 
@@ -166,7 +180,8 @@ class ApertureLightCurve(TimeSeries):
             )
 
             photometry_group = lc_group.create_group("AperturePhotometry")
-            for aperture_name, aperture_size in [("Primary", 3), ("Small", 1), ("Large", 5)]:
+            for name, aperture_size in LIGHT_CURVE_APERTURES:
+                aperture_name = name.capitalize()
                 aperture_group = photometry_group.create_group(f"{aperture_name}Aperture")
                 aperture_group.attrs["name"] = f"TGLCAperture{aperture_name}"
                 aperture_group.attrs["description"] = f"{aperture_size}x{aperture_size} square"

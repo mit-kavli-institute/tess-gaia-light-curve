@@ -301,7 +301,11 @@ def test_write_epsf_fits_roundtrip(tmp_path: Path):
 def test_write_epsf_fits_roundtrips_throughput_scalars(tmp_path: Path):
     # Full-precision reference flux; the cutout exposure is fractional for 200 s FFIs.
     epsf = _make_synthetic_epsf_product(
-        reference_flux=16_315.123456789012, exposure=158.4, ccd_x=1910, ccd_y=1716
+        reference_flux=16_315.123456789012,
+        exposure=158.4,
+        ccd_x=1910,
+        ccd_y=1716,
+        cutout_size=150,
     )
     fits_path = tmp_path / "epsf_0_0.fits"
     write_epsf_fits(epsf, fits_path)
@@ -309,7 +313,7 @@ def test_write_epsf_fits_roundtrips_throughput_scalars(tmp_path: Path):
     loaded = read_epsf_fits(fits_path)
     assert loaded.reference_flux == epsf.reference_flux
     assert loaded.exposure == 158.4
-    assert (loaded.ccd_x, loaded.ccd_y) == (1910, 1716)
+    assert (loaded.ccd_x, loaded.ccd_y, loaded.cutout_size) == (1910, 1716, 150)
 
 
 def test_read_epsf_fits_without_throughput_scalars(tmp_path: Path):
@@ -317,16 +321,13 @@ def test_read_epsf_fits_without_throughput_scalars(tmp_path: Path):
     fits_path = tmp_path / "epsf_0_0.fits"
     write_epsf_fits(_make_synthetic_epsf_product(), fits_path)
     header = fits.getheader(fits_path)
-    for keyword in ("REFFLUX", "EXPOSURE", "CCDX", "CCDY"):
+    for keyword in ("REFFLUX", "EXPOSURE", "CCDX", "CCDY", "CUTSIZE"):
         assert keyword not in header
 
     loaded = read_epsf_fits(fits_path)
-    assert (loaded.reference_flux, loaded.exposure, loaded.ccd_x, loaded.ccd_y) == (
-        None,
-        None,
-        None,
-        None,
-    )
+    assert loaded.reference_flux is None
+    assert loaded.exposure is None
+    assert (loaded.ccd_x, loaded.ccd_y, loaded.cutout_size) == (None, None, None)
 
 
 def test_epsf_to_fits_from_fits_roundtrip(tmp_path: Path):

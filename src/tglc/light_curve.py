@@ -13,7 +13,11 @@ from astropy.time import Time
 import astropy.units as u
 import numpy as np
 
-from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
+from tglc.aperture_light_curve import (
+    LIGHT_CURVE_APERTURES,
+    ApertureLightCurve,
+    ApertureLightCurveMetadata,
+)
 from tglc.aperture_photometry import get_normalized_aperture_photometry
 from tglc.epsf import EPSF
 from tglc.ffi import FFICutout
@@ -26,10 +30,6 @@ from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
 
 logger = logging.getLogger(__name__)
-
-
-LIGHT_CURVE_APERTURES = (("primary", 3), ("small", 1), ("large", 5))
-"""(name, side length) of the square apertures extracted for every light curve."""
 
 
 class CutoutWindow(NamedTuple):
@@ -545,6 +545,8 @@ def generate_light_curves(
             sector=source.sector,
             camera=source.camera,
             ccd=source.ccd,
+            cutout_x=source.cutout_x,
+            cutout_y=source.cutout_y,
             ccd_x=target_ccd_x,
             ccd_y=target_ccd_y,
             sky_coord=sky_coord,

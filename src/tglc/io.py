@@ -387,6 +387,7 @@ def write_epsf_fits(epsf: EPSF, path: Path) -> None:
         ("EXPOSURE", epsf.exposure, "[s] exposure time per cadence"),
         ("CCDX", epsf.ccd_x, "CCD x of cutout origin"),
         ("CCDY", epsf.ccd_y, "CCD y of cutout origin"),
+        ("CUTSIZE", epsf.cutout_size, "[pixel] cutout side length"),
     ]:
         if value is not None:
             header[keyword] = (value, comment)
@@ -400,7 +401,7 @@ def read_epsf_fits(path: Path) -> EPSF:
     """Read an :class:`tglc.epsf.EPSF` previously written by :func:`write_epsf_fits`.
 
     All header keywords written by :func:`write_epsf_fits` are required, except the optional
-    ``REFFLUX``/``EXPOSURE``/``CCDX``/``CCDY`` (absent from older files, read as `None`), and
+    ``REFFLUX``/``EXPOSURE``/``CCDX``/``CCDY``/``CUTSIZE`` (absent from older files, read as `None`), and
     the array shape is validated against the header configuration by the
     :class:`tglc.epsf.EPSF` constructor, so corrupt or mismatched files fail
     loudly at read time.
@@ -439,4 +440,5 @@ def read_epsf_fits(path: Path) -> EPSF:
         exposure=header.get("EXPOSURE"),
         ccd_x=header.get("CCDX"),
         ccd_y=header.get("CCDY"),
+        cutout_size=header.get("CUTSIZE"),
     )
