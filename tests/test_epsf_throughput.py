@@ -16,7 +16,7 @@ from tglc.aperture_photometry import (
     measure_aperture_flux,
 )
 from tglc.epsf import EPSF, get_reference_flux
-from tglc.epsf_throughput import EPSFThroughput, read_hdf5_offset_flux
+from tglc.epsf_throughput import EPSFThroughput, read_hdf5_raw_flux
 from tglc.io import write_epsf_fits
 from tglc.light_curve import (
     LIGHT_CURVE_APERTURES,
@@ -32,7 +32,13 @@ from .synthetic_data import make_synthetic_cutout, make_synthetic_epsf
 
 PSF_SIZE = 11
 OVERSAMPLE = 2
-REFERENCE_FLUX = 15_000 * u.electron / u.second
+THROUGHPUT_KWARGS = {
+    "reference_flux": 15_000 * u.electron / u.second,
+    "exposure_time": 200 * u.second,
+    "ccd_x": 0,
+    "ccd_y": 0,
+    "cutout_size": 150,
+}
 
 
 def _make_epsf(array: np.ndarray, **overrides) -> EPSF:
@@ -92,7 +98,7 @@ def test_from_epsf_matches_from_cutout_for_fitted_epsf():
         use_gpu=False,
     )
     assert epsf.reference_flux == get_reference_flux(cutout)
-    assert (epsf.exposure, epsf.ccd_x, epsf.ccd_y) == (200, 44, 0)
+    assert (epsf.exposure, epsf.ccd_x, epsf.ccd_y, epsf.cutout_size) == (200, 44, 0, 12)
     x, y = cutout.star_positions[0]
     np.testing.assert_array_equal(
         EPSFThroughput.from_epsf(epsf).flux_fraction(x, y),
@@ -102,14 +108,21 @@ def test_from_epsf_matches_from_cutout_for_fitted_epsf():
 
 def test_from_epsf_rejects_epsf_without_recorded_scalars():
     _, epsf = _make_cutout_and_epsf()
-    with pytest.raises(ValueError, match="does not record reference_flux, exposure, ccd_x, ccd_y"):
+    with pytest.raises(
+        ValueError, match="does not record reference_flux, exposure, ccd_x, ccd_y, cutout_size"
+    ):
         EPSFThroughput.from_epsf(epsf)
 
 
 def test_from_fits_needs_only_the_epsf_file(tmp_path):
     cutout, epsf = _make_cutout_and_epsf()
     recorded = _make_epsf(
-        epsf.array, reference_flux=get_reference_flux(cutout), exposure=200, ccd_x=44, ccd_y=0
+        epsf.array,
+        reference_flux=get_reference_flux(cutout),
+        exposure=200,
+        ccd_x=44,
+        ccd_y=0,
+        cutout_size=12,
     )
     write_epsf_fits(recorded, tmp_path / "epsf.fits")
     x, y = cutout.star_positions[2]
@@ -163,9 +176,7 @@ def test_flux_fraction_keeps_half_pixel_footprint(psf_size, position):
         array, psf_size=psf_size, oversample=OVERSAMPLE, orbit=1, sector=1, camera=1, ccd=1,
         cutout_x=0, cutout_y=0,
     )  # fmt: skip
-    throughput = EPSFThroughput(
-        epsf, reference_flux=REFERENCE_FLUX, exposure_time=200 * u.second, ccd_x=0, ccd_y=0
-    )
+    throughput = EPSFThroughput(epsf, **THROUGHPUT_KWARGS)
     x, y = position
     shift = 20
     image_shape = (50, 50)
@@ -194,10 +205,7 @@ def test_flux_fraction_of_flat_psf_counts_whole_footprint(x, y, level):
     array[:, : (PSF_SIZE * OVERSAMPLE + 1) ** 2] = level
     throughput = EPSFThroughput(
         _make_epsf(array),
-        reference_flux=REFERENCE_FLUX,
-        exposure_time=200 * u.second,
-        ccd_x=0,
-        ccd_y=0,
+        **THROUGHPUT_KWARGS,
     )
     np.testing.assert_allclose(
         throughput.flux_fraction(x, y),
@@ -214,12 +222,7 @@ def test_flux_fraction_of_flat_psf_counts_whole_footprint(x, y, level):
 )
 def test_flux_fraction_is_linear_in_psf_parameters(x, y, scale):
     _, epsf = _make_cutout_and_epsf()
-    kwargs = {
-        "reference_flux": REFERENCE_FLUX,
-        "exposure_time": 200 * u.second,
-        "ccd_x": 0,
-        "ccd_y": 0,
-    }
+    kwargs = THROUGHPUT_KWARGS
     scaled_epsf = _make_epsf(epsf.array * scale)
     np.testing.assert_allclose(
         EPSFThroughput(scaled_epsf, **kwargs).flux_fraction(x, y),
@@ -246,36 +249,44 @@ def test_flux_fraction_at_ccd_subtracts_cutout_origin():
     )
 
 
-def test_flux_fraction_recovers_injected_throughput():
-    """An ePSF fit to stars delivering a fraction `s` of their catalog flux measures `s`."""
+def _make_injected_throughput_cutout(throughput: np.ndarray):
+    """Noise-free cutout whose stars deliver `throughput[t]` of their catalog flux, plus its fit.
+
+    The flux is rendered with the pipeline's own design matrix from a unit-total Gaussian PSF on the
+    oversampled grid, scaled to the brightest star's flux, over a flat background.
+    """
     rng = np.random.default_rng(seed=23)
-    size, n_stars, throughput_loss = 40, 40, 0.8
-    cutout = make_synthetic_cutout(n_cadences=1, size=size)
+    size, n_stars = 40, 40
+    cutout = make_synthetic_cutout(n_cadences=len(throughput), size=size)
     tess_mag = rng.uniform(9, 13, n_stars)
     cutout.gaia = Table(
         {
             "designation": [f"Gaia DR3 {i}" for i in range(n_stars)],
+            "ra": np.full(n_stars, 120.5),
+            "dec": np.full(n_stars, -45.25),
             "tess_mag": tess_mag,
             "tess_flux_ratio": 10 ** (-(tess_mag - tess_mag.min()) / 2.5),
             "sector_89_x": rng.uniform(-3, size + 2, n_stars),
             "sector_89_y": rng.uniform(-3, size + 2, n_stars),
         }
     )
-    # A unit-total Gaussian PSF on the oversampled grid, scaled to the brightest star's flux.
+    cutout.tic = Table({"TIC": np.arange(n_stars), "gaia3": np.arange(n_stars)})
     grid = (np.arange(PSF_SIZE * OVERSAMPLE + 1) - PSF_SIZE) / OVERSAMPLE
     gaussian = np.exp(-0.5 * (grid[:, None] ** 2 + grid[None, :] ** 2) / 1.2**2)
     gaussian /= gaussian.sum() / OVERSAMPLE**2
     reference_flux = get_expected_total_flux(tess_mag.min(), cutout.exposure)
-    true_parameters = np.concatenate(
-        [throughput_loss * reference_flux * gaussian.flatten(), [0, 0, 0, 0, 0, 100.0]]
+    true_parameters = np.array(
+        [
+            np.concatenate([loss * reference_flux * gaussian.flatten(), [0, 0, 0, 0, 0, 100.0]])
+            for loss in throughput
+        ]
     )
-    true_epsf = _make_epsf(true_parameters[np.newaxis, :])
+    cutout.mask = np.ma.masked_array(cutout.mask.data[:size, :size], mask=False)
+    true_epsf = _make_epsf(true_parameters)
     design_matrix, _ = true_epsf.make_design_matrix(
         (size, size), cutout.star_positions, cutout.gaia["tess_flux_ratio"].data, cutout.mask.data
     )
-    cutout.flux = (design_matrix @ true_parameters).reshape(1, size, size)
-    cutout.mask = np.ma.masked_array(cutout.mask.data[:size, :size], mask=False)
-
+    cutout.flux = (true_parameters @ design_matrix.T).reshape(len(throughput), size, size)
     fit_epsf = EPSF.from_cutout_fit(
         cutout,
         psf_size=PSF_SIZE,
@@ -284,10 +295,16 @@ def test_flux_fraction_recovers_injected_throughput():
         flux_uncertainty_power=1.4,
         use_gpu=False,
     )
+    return cutout, true_epsf, fit_epsf
+
+
+def test_flux_fraction_recovers_injected_throughput():
+    """An ePSF fit to stars delivering a fraction `s` of their catalog flux measures `s`."""
+    cutout, true_epsf, fit_epsf = _make_injected_throughput_cutout(np.array([0.8]))
     x, y = 20.3, 19.8
     fitted = EPSFThroughput.from_cutout(fit_epsf, cutout).flux_fraction(x, y)
     truth = EPSFThroughput.from_cutout(true_epsf, cutout).flux_fraction(x, y)
-    np.testing.assert_allclose(truth, throughput_loss, rtol=1e-2)
+    np.testing.assert_allclose(truth, 0.8, rtol=1e-2)
     # The edge-compression regularization biases the fit slightly.
     np.testing.assert_allclose(fitted, truth, rtol=5e-3)
 
@@ -297,19 +314,59 @@ def test_flux_fraction_recovers_injected_throughput():
 #######################################################################
 
 
+def test_correction_removes_time_varying_throughput(monkeypatch):
+    """Dividing the un-normalized flux by f(t) flattens a throughput drift.
+
+    Dividing the normalized flux instead counts the median deficit twice: it inflates the light
+    curve by about 1 / f and over-corrects the drift into a reversed trend.
+    """
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+    throughput = np.array([0.7, 0.8, 0.9])
+    cutout, _, fit_epsf = _make_injected_throughput_cutout(throughput)
+    light_curve = next(iter(generate_light_curves(cutout, fit_epsf, Path("/nonexistent"))))
+
+    corrected = EPSFThroughput.from_epsf(fit_epsf).correct_light_curve(light_curve)
+
+    np.testing.assert_allclose(corrected["epsf_flux_fraction"], throughput, rtol=5e-3)
+    normalized_flux = light_curve["primary_aperture_flux"].to_value(u.electron)
+    assert np.ptp(normalized_flux) / np.mean(normalized_flux) > 0.15  # the drift is visible
+    corrected_flux = corrected["primary_aperture_flux"].to_value(u.electron)
+    # What remains is the fit's ~0.1% bias (see test_flux_fraction_recovers_injected_throughput).
+    assert np.ptp(corrected_flux) / np.mean(corrected_flux) < 5e-3
+    # The corrected flux sits at the catalog-expected aperture flux, up to the light curve's 5x5
+    # flux-portion approximation (a constant, target-dependent factor of a few percent).
+    expected_aperture_flux = (
+        get_expected_total_flux(light_curve.meta["tess_magnitude"], cutout.exposure)
+        * light_curve.meta["primary_aperture_flux_portion"]
+    )
+    np.testing.assert_allclose(corrected_flux, expected_aperture_flux, rtol=0.1)
+
+
 @given(
-    flux=st.floats(1.0, 1e8),
+    raw_flux=st.floats(1.0, 1e8),
     fraction=st.floats(0.05, 2.0),
+    flux_portion=st.floats(0.05, 1.0),
 )
-def test_flux_and_magnitude_corrections_agree(flux, fraction):
-    magnitude = convert_tess_flux_to_tess_magnitude(flux * u.electron / u.second)
-    corrected_flux = EPSFThroughput.correct_flux(flux, fraction)
+def test_corrected_magnitude_is_magnitude_of_corrected_flux(raw_flux, fraction, flux_portion):
+    throughput = EPSFThroughput(_make_epsf(make_synthetic_epsf(1)), **THROUGHPUT_KWARGS)
+    flux, magnitude = throughput._correct_aperture(
+        np.array([raw_flux]) * u.electron, np.array([fraction]), flux_portion
+    )
+    np.testing.assert_allclose(flux.to_value(u.electron), raw_flux / fraction, rtol=1e-12)
     np.testing.assert_allclose(
-        EPSFThroughput.correct_magnitude(magnitude, fraction),
-        convert_tess_flux_to_tess_magnitude(corrected_flux * u.electron / u.second),
+        magnitude,
+        convert_tess_flux_to_tess_magnitude(
+            raw_flux / fraction / flux_portion / (200 * u.second) * u.electron
+        ),
         rtol=0,
         atol=1e-12,
     )
+
+
+def test_correct_flux_rejects_non_positive_fractions(caplog):
+    flux = EPSFThroughput.correct_flux(np.array([10.0, 10.0, 10.0]), np.array([0.5, 0.0, -0.1]))
+    np.testing.assert_array_equal(flux, [20.0, np.nan, np.nan])
+    assert "2 cadences have a non-positive ePSF flux fraction" in caplog.text
 
 
 @pytest.fixture
@@ -317,6 +374,18 @@ def light_curves(monkeypatch):
     monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
     cutout, epsf = _make_cutout_and_epsf()
     return cutout, epsf, list(generate_light_curves(cutout, epsf, Path("/nonexistent")))
+
+
+def _expected_correction(throughput, light_curve, aperture_name, fraction):
+    raw_flux = (
+        light_curve[f"{aperture_name}_aperture_flux"]
+        + light_curve.meta[f"{aperture_name}_aperture_local_background"]
+    )
+    flux = raw_flux / fraction
+    magnitude = convert_tess_flux_to_tess_magnitude(
+        flux / light_curve.meta[f"{aperture_name}_aperture_flux_portion"] / throughput.exposure_time
+    )
+    return flux, magnitude
 
 
 def test_correct_light_curve_divides_out_flux_fraction(light_curves):
@@ -329,26 +398,65 @@ def test_correct_light_curve_divides_out_flux_fraction(light_curves):
     fraction = throughput.flux_fraction(*cutout.star_positions[0])
     np.testing.assert_allclose(corrected["epsf_flux_fraction"], fraction, rtol=1e-12)
     for aperture_name, _ in LIGHT_CURVE_APERTURES:
+        flux, magnitude = _expected_correction(throughput, light_curve, aperture_name, fraction)
+        np.testing.assert_allclose(corrected[f"{aperture_name}_aperture_flux"], flux, rtol=1e-12)
         np.testing.assert_allclose(
-            corrected[f"{aperture_name}_aperture_flux"],
-            light_curve[f"{aperture_name}_aperture_flux"] / fraction,
-            rtol=1e-12,
-        )
-        np.testing.assert_allclose(
-            corrected[f"{aperture_name}_aperture_magnitude"],
-            light_curve[f"{aperture_name}_aperture_magnitude"] + 2.5 * np.log10(fraction),
-            rtol=1e-12,
+            corrected[f"{aperture_name}_aperture_magnitude"], magnitude, rtol=1e-12
         )
     # The input light curve is not modified.
     assert "epsf_flux_fraction" not in light_curve.colnames
 
 
-def test_correct_light_curve_rejects_other_ccd(light_curves):
-    cutout, _, (light_curve, *_) = light_curves
-    throughput = EPSFThroughput.from_cutout(_make_epsf(make_synthetic_epsf(5)), cutout)
-    light_curve.meta["ccd"] = 2
-    with pytest.raises(ValueError, match="ePSF is for orbit 185 1-1"):
+def test_correct_light_curve_without_local_background_uses_flux_as_is(light_curves):
+    cutout, epsf, (light_curve, *_) = light_curves
+    throughput = EPSFThroughput.from_cutout(epsf, cutout)
+    # A NaN local background means normalization found no good cadences and subtracted nothing.
+    light_curve.meta["primary_aperture_local_background"] = np.nan * u.electron
+
+    corrected = throughput.correct_light_curve(light_curve)
+
+    np.testing.assert_allclose(
+        corrected["primary_aperture_flux"],
+        light_curve["primary_aperture_flux"] / corrected["epsf_flux_fraction"],
+        rtol=1e-12,
+    )
+
+
+@pytest.mark.parametrize(
+    ("meta_update", "match"),
+    [
+        ({"ccd": 2}, "ePSF is for orbit 185 1-1"),
+        ({"cutout_x": 1}, r"is for cutout \(1, 0\), but the ePSF is for cutout \(0, 0\)"),
+        ({"ccd_x": 44 + 13.0}, "lies outside the ePSF's 12 px cutout"),
+        ({"ccd_y": -0.5}, "lies outside the ePSF's 12 px cutout"),
+    ],
+)
+def test_correct_light_curve_rejects_light_curve_from_another_cutout(
+    light_curves, meta_update, match
+):
+    cutout, epsf, (light_curve, *_) = light_curves
+    throughput = EPSFThroughput.from_cutout(epsf, cutout)
+    light_curve.meta.update(meta_update)
+    with pytest.raises(ValueError, match=match):
         throughput.correct_light_curve(light_curve)
+
+
+def test_correct_light_curve_rejects_cadence_count_mismatch(light_curves):
+    cutout, _, (light_curve, *_) = light_curves
+    throughput = EPSFThroughput(
+        _make_epsf(make_synthetic_epsf(n_cadences=6)),
+        **{**THROUGHPUT_KWARGS, "ccd_x": cutout.ccd_x, "cutout_size": cutout.size},
+    )
+    with pytest.raises(ValueError, match="has 5 cadences, but the ePSF has 6"):
+        throughput.correct_light_curve(light_curve)
+
+
+def test_legacy_cutout_index_sentinel_skips_index_check(light_curves):
+    cutout, epsf, (light_curve, *_) = light_curves
+    legacy_epsf = _make_epsf(epsf.array, cutout_x=-1, cutout_y=-1)
+    throughput = EPSFThroughput.from_cutout(legacy_epsf, cutout)
+    light_curve.meta["cutout_x"] = 3
+    throughput.correct_light_curve(light_curve)
 
 
 #######################################################################
@@ -356,8 +464,9 @@ def test_correct_light_curve_rejects_other_ccd(light_curves):
 #######################################################################
 
 
-def test_light_curve_records_flux_portion(light_curves):
+def test_light_curve_records_flux_portion_and_cutout(light_curves):
     cutout, epsf, (light_curve, *_) = light_curves
+    assert (light_curve.meta["cutout_x"], light_curve.meta["cutout_y"]) == (0, 0)
     design_matrix, _ = epsf.make_design_matrix(
         cutout.flux.shape[1:],
         cutout.star_positions,
@@ -395,25 +504,17 @@ def test_hdf5_scalars_invert_normalization(light_curves, tmp_path):
     with h5py.File(path) as file:
         assert file.attrs["ExposureTime"] == 200
         assert file.attrs["ZeroPointFlux"] == 15_000
+        assert (file.attrs["CutoutX"], file.attrs["CutoutY"]) == (0, 0)
         for aperture_name, aperture_size in LIGHT_CURVE_APERTURES:
-            aperture_group = file["LightCurve/AperturePhotometry"][
-                f"{aperture_name.capitalize()}Aperture"
-            ]
-            offset_flux = read_hdf5_offset_flux(file, aperture_name)
-            np.testing.assert_allclose(
-                offset_flux, light_curve[f"{aperture_name}_aperture_flux"], rtol=1e-12
-            )
             raw_flux = measure_aperture_flux(
                 images,
                 get_aperture_limits(
                     aperture_size, round(star_x), round(star_y), images.shape[1], images.shape[2]
                 ),
             )
-            # Adding back the background cancels most of the offset flux's digits.
+            # Adding back the background cancels most of the normalized flux's digits.
             np.testing.assert_allclose(
-                offset_flux.to_value(u.electron) + aperture_group.attrs["localbackground"],
-                raw_flux,
-                rtol=1e-9,
+                read_hdf5_raw_flux(file, aperture_name).to_value(u.electron), raw_flux, rtol=1e-9
             )
 
 
@@ -447,6 +548,7 @@ def test_hdf5_adds_no_time_series(light_curves, tmp_path):
 
 def test_correct_hdf5_matches_correct_light_curve(light_curves, tmp_path):
     cutout, epsf, (light_curve, *_) = light_curves
+    light_curve["quality_flag"][1] = 2
     path = tmp_path / "lc.h5"
     light_curve.write_hdf5(path)
     throughput = EPSFThroughput.from_cutout(epsf, cutout)
@@ -454,32 +556,75 @@ def test_correct_hdf5_matches_correct_light_curve(light_curves, tmp_path):
     from_file = throughput.correct_hdf5(path)
     in_memory = throughput.correct_light_curve(light_curve)
 
-    np.testing.assert_array_equal(from_file["cadence"], light_curve["cadence"])
+    assert from_file["time"].format == "tjd"
+    assert from_file["time"].scale == "tdb"
+    np.testing.assert_allclose(from_file["time"].tjd, in_memory["time"].tjd, rtol=1e-15)
+    for column in ["cadence", "quality_flag", "background_flux"]:
+        np.testing.assert_array_equal(from_file[column], in_memory[column])
     np.testing.assert_allclose(
         from_file["epsf_flux_fraction"], in_memory["epsf_flux_fraction"], rtol=1e-12
     )
     for aperture_name, _ in LIGHT_CURVE_APERTURES:
-        for column in [f"{aperture_name}_aperture_magnitude", f"{aperture_name}_aperture_flux"]:
-            np.testing.assert_allclose(from_file[column], in_memory[column], rtol=1e-12)
+        np.testing.assert_allclose(
+            from_file[f"{aperture_name}_aperture_flux"],
+            in_memory[f"{aperture_name}_aperture_flux"],
+            rtol=1e-9,
+        )
+        np.testing.assert_allclose(
+            from_file[f"{aperture_name}_aperture_magnitude"],
+            in_memory[f"{aperture_name}_aperture_magnitude"],
+            rtol=0,
+            atol=1e-9,
+        )
 
 
-def test_correct_hdf5_without_scalars_returns_magnitudes_only(light_curves, tmp_path):
+@pytest.mark.parametrize(
+    ("attribute", "group"),
+    [
+        ("ExposureTime", "/"),
+        ("CutoutX", "/"),
+        ("fluxportion", "LightCurve/AperturePhotometry/SmallAperture"),
+    ],
+)
+def test_correct_hdf5_rejects_files_without_scalars(light_curves, tmp_path, attribute, group):
     cutout, epsf, (light_curve, *_) = light_curves
     path = tmp_path / "lc.h5"
     light_curve.write_hdf5(path)
     with h5py.File(path, "a") as file:
-        del file.attrs["ExposureTime"]
+        del file[group].attrs[attribute]
 
-    table = EPSFThroughput.from_cutout(epsf, cutout).correct_hdf5(path)
-
-    assert "primary_aperture_magnitude" in table.colnames
-    assert "primary_aperture_flux" not in table.colnames
+    with pytest.raises(ValueError, match=f"does not record {attribute}"):
+        EPSFThroughput.from_cutout(epsf, cutout).correct_hdf5(path)
 
 
-def test_correct_hdf5_rejects_other_ccd(light_curves, tmp_path):
+@pytest.mark.parametrize(
+    ("attribute", "value", "match"),
+    [
+        ("Camera", 3, "is for orbit 185 3-1"),
+        ("CutoutY", 2, r"is for cutout \(0, 2\)"),
+    ],
+)
+def test_correct_hdf5_rejects_file_from_another_cutout(
+    light_curves, tmp_path, attribute, value, match
+):
     cutout, epsf, (light_curve, *_) = light_curves
-    light_curve.meta["camera"] = 3
     path = tmp_path / "lc.h5"
     light_curve.write_hdf5(path)
-    with pytest.raises(ValueError, match="is for orbit 185 3-1"):
+    with h5py.File(path, "a") as file:
+        file.attrs[attribute] = value
+
+    with pytest.raises(ValueError, match=match):
+        EPSFThroughput.from_cutout(epsf, cutout).correct_hdf5(path)
+
+
+def test_correct_hdf5_rejects_empty_file(light_curves, tmp_path):
+    cutout, epsf, (light_curve, *_) = light_curves
+    path = tmp_path / "lc.h5"
+    light_curve.write_hdf5(path)
+    with h5py.File(path, "a") as file:
+        for name in ["BJD", "X", "Y"]:
+            del file["LightCurve"][name]
+            file["LightCurve"].create_dataset(name, data=np.zeros(0))
+
+    with pytest.raises(ValueError, match="has 0 cadences, but the ePSF has 5"):
         EPSFThroughput.from_cutout(epsf, cutout).correct_hdf5(path)

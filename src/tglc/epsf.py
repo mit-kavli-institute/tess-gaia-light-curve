@@ -454,6 +454,7 @@ class EPSF:
         exposure: float | None = None,
         ccd_x: int | None = None,
         ccd_y: int | None = None,
+        cutout_size: int | None = None,
     ):
         """
         Parameters
@@ -482,8 +483,10 @@ class EPSF:
             Exposure time per cadence of the cutout in seconds, or `None` if not recorded.
         ccd_x, ccd_y : int | None
             CCD coordinates of the cutout origin, or `None` if not recorded.
+        cutout_size : int | None
+            Side length in pixels of the cutout, or `None` if not recorded.
 
-        `reference_flux`, `exposure`, `ccd_x`, and `ccd_y` let
+        `reference_flux`, `exposure`, `ccd_x`, `ccd_y`, and `cutout_size` let
         `tglc.epsf_throughput.EPSFThroughput` compute the ePSF flux fraction without the cutout.
         """
         array = np.asarray(array, dtype=np.float64)
@@ -508,6 +511,7 @@ class EPSF:
         self.exposure = None if exposure is None else float(exposure)
         self.ccd_x = None if ccd_x is None else int(ccd_x)
         self.ccd_y = None if ccd_y is None else int(ccd_y)
+        self.cutout_size = None if cutout_size is None else int(cutout_size)
 
     def __repr__(self) -> str:
         return (
@@ -670,6 +674,7 @@ class EPSF:
             exposure=cutout.exposure,
             ccd_x=cutout.ccd_x,
             ccd_y=cutout.ccd_y,
+            cutout_size=cutout.size,
         )
 
     @classmethod
