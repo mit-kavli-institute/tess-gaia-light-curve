@@ -68,18 +68,22 @@ Light curves are normalized additively: each aperture's flux is shifted so its g
 
 The un-normalized aperture flux in electrons is `fluxportion * ExposureTime * ZeroPointFlux * 10 ** (-0.4 * (RawMagnitude - 10)) + localbackground`.
 
-The ePSF fit also absorbs the optical throughput loss multiplicatively, increasingly so toward the camera edge. That factor is a time series, so it is not stored. Recompute it from the cutout and ePSF products and divide it out of the offset flux and magnitude:
+The ePSF fit also absorbs the optical throughput loss multiplicatively, increasingly so toward the camera edge. That factor is a time series, so it is not stored. Recompute it from the ePSF product, which records the scalars it needs in its header, and divide it out of the offset flux and magnitude:
+
+- `REFFLUX`: the catalog flux in e⁻/s of the cutout's brightest catalog star, which has flux ratio 1. The fitted PSF amplitudes are in units of this flux.
+- `EXPOSURE`: the exposure time in seconds.
+- `CCDX`/`CCDY`: the cutout origin on the CCD.
 
 ```python
 from tglc.epsf_throughput import EPSFThroughput
 
-throughput = EPSFThroughput.from_fits("epsf/epsf_0_0.fits", "source/source_0_0.fits")
+throughput = EPSFThroughput.from_fits("epsf/epsf_0_0.fits")
 corrected = throughput.correct_hdf5(
     "LC/123456789.h5"
 )  # epsf_flux_fraction plus corrected magnitude and flux
 ```
 
-`EPSFThroughput.correct_light_curve` does the same for an in-memory `ApertureLightCurve`. The flux fraction is the target-only ePSF model summed over the full PSF footprint, divided by the target's catalog-expected flux. It depends on the cutout and cadence, not on the target's magnitude.
+`EPSFThroughput.correct_light_curve` does the same for an in-memory `ApertureLightCurve`. ePSF files written before these keywords existed also need their cutout: `EPSFThroughput.from_fits(epsf_path, cutout_path)`. The flux fraction is the target-only ePSF model summed over the full PSF footprint, divided by the target's catalog-expected flux. It depends on the cutout and cadence, not on the target's magnitude.
 
 ## Development
 

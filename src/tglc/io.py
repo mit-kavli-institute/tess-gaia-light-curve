@@ -381,6 +381,15 @@ def write_epsf_fits(epsf: EPSF, path: Path) -> None:
     header["CUTOUTY"] = epsf.cutout_y
     for i, name in enumerate(epsf.background_columns):
         header[f"BGCOL{i}"] = name
+    # Optional: absent from files written before they were recorded.
+    for keyword, value, comment in [
+        ("REFFLUX", epsf.reference_flux, "[e-/s] catalog flux of flux-ratio-1 star"),
+        ("EXPOSURE", epsf.exposure, "[s] exposure time per cadence"),
+        ("CCDX", epsf.ccd_x, "CCD x of cutout origin"),
+        ("CCDY", epsf.ccd_y, "CCD y of cutout origin"),
+    ]:
+        if value is not None:
+            header[keyword] = (value, comment)
     _add_provenance_keywords(header)
 
     hdu = fits.PrimaryHDU(data=epsf.array, header=header)
@@ -390,7 +399,8 @@ def write_epsf_fits(epsf: EPSF, path: Path) -> None:
 def read_epsf_fits(path: Path) -> EPSF:
     """Read an :class:`tglc.epsf.EPSF` previously written by :func:`write_epsf_fits`.
 
-    All header keywords written by :func:`write_epsf_fits` are required, and
+    All header keywords written by :func:`write_epsf_fits` are required, except the optional
+    ``REFFLUX``/``EXPOSURE``/``CCDX``/``CCDY`` (absent from older files, read as `None`), and
     the array shape is validated against the header configuration by the
     :class:`tglc.epsf.EPSF` constructor, so corrupt or mismatched files fail
     loudly at read time.
@@ -425,4 +435,8 @@ def read_epsf_fits(path: Path) -> EPSF:
         cutout_x=header["CUTOUTX"],
         cutout_y=header["CUTOUTY"],
         background_columns=tuple(str(header.get(f"BGCOL{i}", "")) for i in range(n_background)),
+        reference_flux=header.get("REFFLUX"),
+        exposure=header.get("EXPOSURE"),
+        ccd_x=header.get("CCDX"),
+        ccd_y=header.get("CCDY"),
     )
