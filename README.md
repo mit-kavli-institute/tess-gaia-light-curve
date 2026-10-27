@@ -88,6 +88,12 @@ corrected = throughput.correct_hdf5("LC/123456789.h5")
 
 ePSF files written before these keywords existed also need their cutout: `EPSFThroughput.from_fits(epsf_path, cutout_path)`.
 
+ePSF files written before these keywords existed can be updated in place from their cutouts, with no re-fit, using the temporary `tglc backfill-epsf-headers` command. It reads only the cutouts' headers and catalogs:
+
+```shell
+tglc backfill-epsf-headers -o 223 -n 8
+```
+
 The flux fraction is the target-only ePSF model summed over the full PSF footprint, divided by the target's catalog-expected flux. It depends on the cutout and cadence, not on the target's magnitude.
 
 ## Development

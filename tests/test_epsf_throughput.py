@@ -81,7 +81,7 @@ def test_get_reference_flux_is_flux_ratio_one_catalog_flux():
     for tess_mag, flux_ratio in zip(
         cutout.gaia["tess_mag"], cutout.gaia["tess_flux_ratio"], strict=True
     ):
-        assert get_reference_flux(cutout) == pytest.approx(
+        assert get_reference_flux(cutout.gaia) == pytest.approx(
             get_expected_total_flux(tess_mag, 1.0) / flux_ratio, rel=1e-12
         )
 
@@ -97,7 +97,7 @@ def test_from_epsf_matches_from_cutout_for_fitted_epsf():
         flux_uncertainty_power=1.4,
         use_gpu=False,
     )
-    assert epsf.reference_flux == get_reference_flux(cutout)
+    assert epsf.reference_flux == get_reference_flux(cutout.gaia)
     assert (epsf.exposure, epsf.ccd_x, epsf.ccd_y, epsf.cutout_size) == (200, 44, 0, 12)
     x, y = cutout.star_positions[0]
     np.testing.assert_array_equal(
@@ -118,7 +118,7 @@ def test_from_fits_needs_only_the_epsf_file(tmp_path):
     cutout, epsf = _make_cutout_and_epsf()
     recorded = _make_epsf(
         epsf.array,
-        reference_flux=get_reference_flux(cutout),
+        reference_flux=get_reference_flux(cutout.gaia),
         exposure=200,
         ccd_x=44,
         ccd_y=0,
