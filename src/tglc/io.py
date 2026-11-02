@@ -25,7 +25,7 @@ from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS, FITSFixedWarning
 import numpy as np
 
-from tglc.epsf import EPSF
+from tglc.epsf import EPSF, get_reference_flux
 from tglc.utils.constants import get_effective_exposure_time_from_sector
 
 
@@ -350,6 +350,31 @@ def read_cutout_fits(path: Path) -> FFICutout:
 # ---------------------------------------------------------------------
 
 
+EPSF_THROUGHPUT_KEYWORDS = ("REFFLUX", "EXPOSURE", "CCDX", "CCDY", "CUTSIZE")
+"""Optional ePSF header keywords that let `tglc.epsf_throughput.EPSFThroughput` skip the cutout."""
+
+
+def _add_epsf_throughput_keywords(
+    header: fits.Header,
+    *,
+    reference_flux: float | None,
+    exposure: float | None,
+    ccd_x: int | None,
+    ccd_y: int | None,
+    cutout_size: int | None,
+) -> None:
+    """Record the ePSF throughput scalars in a header, in place, skipping `None` values."""
+    for keyword, value, comment in [
+        ("REFFLUX", reference_flux, "[e-/s] catalog flux of flux-ratio-1 star"),
+        ("EXPOSURE", exposure, "[s] exposure time per cadence"),
+        ("CCDX", ccd_x, "CCD x of cutout origin"),
+        ("CCDY", ccd_y, "CCD y of cutout origin"),
+        ("CUTSIZE", cutout_size, "[pixel] cutout side length"),
+    ]:
+        if value is not None:
+            header[keyword] = (value, comment)
+
+
 def write_epsf_fits(epsf: EPSF, path: Path) -> None:
     """Write a fitted ePSF to a single-HDU FITS file.
 
@@ -381,6 +406,15 @@ def write_epsf_fits(epsf: EPSF, path: Path) -> None:
     header["CUTOUTY"] = epsf.cutout_y
     for i, name in enumerate(epsf.background_columns):
         header[f"BGCOL{i}"] = name
+    # Optional: absent from files written before they were recorded.
+    _add_epsf_throughput_keywords(
+        header,
+        reference_flux=epsf.reference_flux,
+        exposure=epsf.exposure,
+        ccd_x=epsf.ccd_x,
+        ccd_y=epsf.ccd_y,
+        cutout_size=epsf.cutout_size,
+    )
     _add_provenance_keywords(header)
 
     hdu = fits.PrimaryHDU(data=epsf.array, header=header)
@@ -390,7 +424,8 @@ def write_epsf_fits(epsf: EPSF, path: Path) -> None:
 def read_epsf_fits(path: Path) -> EPSF:
     """Read an :class:`tglc.epsf.EPSF` previously written by :func:`write_epsf_fits`.
 
-    All header keywords written by :func:`write_epsf_fits` are required, and
+    All header keywords written by :func:`write_epsf_fits` are required, except the optional
+    ``REFFLUX``/``EXPOSURE``/``CCDX``/``CCDY``/``CUTSIZE`` (absent from older files, read as `None`), and
     the array shape is validated against the header configuration by the
     :class:`tglc.epsf.EPSF` constructor, so corrupt or mismatched files fail
     loudly at read time.
@@ -425,4 +460,101 @@ def read_epsf_fits(path: Path) -> EPSF:
         cutout_x=header["CUTOUTX"],
         cutout_y=header["CUTOUTY"],
         background_columns=tuple(str(header.get(f"BGCOL{i}", "")) for i in range(n_background)),
+        reference_flux=header.get("REFFLUX"),
+        exposure=header.get("EXPOSURE"),
+        ccd_x=header.get("CCDX"),
+        ccd_y=header.get("CCDY"),
+        cutout_size=header.get("CUTSIZE"),
     )
+
+
+# ---------------------------------------------------------------------
+# TEMPORARY: ePSF header backfill (remove with `tglc backfill-epsf-headers`)
+# ---------------------------------------------------------------------
+
+
+def backfill_epsf_throughput_keywords(
+    epsf_path: Path, cutout_path: Path, replace: bool = False
+) -> bool:
+    """Add the ePSF throughput keywords to an ePSF file written before they were recorded.
+
+    The values come from the cutout the ePSF was fit for, exactly as `EPSF.from_cutout_fit`
+    derives them, so the ePSF needs no re-fit. Only the cutout's primary header and its GAIA and
+    CADENCES tables are read, never the flux cube. The ePSF array and the original provenance
+    keywords are kept; a ``HISTORY`` card records the backfill. The file is rewritten atomically.
+
+    Parameters
+    ----------
+    epsf_path : pathlib.Path
+        ePSF FITS file to update in place.
+    cutout_path : pathlib.Path
+        Cutout FITS file the ePSF was fit for.
+    replace : bool
+        Rewrite the keywords even if all of them are already present.
+
+    Returns
+    -------
+    updated : bool
+        Whether the file was rewritten. `False` if all keywords were present and `replace` is
+        `False`.
+
+    Raises
+    ------
+    ValueError
+        If the cutout's orbit, sector, camera, CCD, cutout indices, or cadence count don't match
+        the ePSF's.
+    """
+    epsf_path, cutout_path = Path(epsf_path), Path(cutout_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", VerifyWarning)
+        with fits.open(epsf_path, memmap=False) as epsf_hdul:
+            header = epsf_hdul[0].header.copy()
+            data = np.array(epsf_hdul[0].data)
+    if not replace and all(keyword in header for keyword in EPSF_THROUGHPUT_KEYWORDS):
+        return False
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FITSFixedWarning)
+        warnings.simplefilter("ignore", VerifyWarning)
+        with fits.open(cutout_path) as cutout_hdul:
+            cutout_header = cutout_hdul[0].header.copy()
+            gaia_table = Table.read(cutout_hdul["GAIA"])
+            n_cadences = int(cutout_hdul["CADENCES"].header["NAXIS2"])
+
+    for keyword in ("ORBIT", "SECTOR", "CAMERA", "CCD"):
+        if int(header[keyword]) != int(cutout_header[keyword]):
+            raise ValueError(
+                f"ePSF {epsf_path} has {keyword} {header[keyword]}, but cutout {cutout_path} has "
+                f"{cutout_header[keyword]}"
+            )
+    for keyword in ("CUTOUTX", "CUTOUTY"):
+        # -1 is the legacy "not set" sentinel on either side.
+        epsf_index, cutout_index = int(header[keyword]), int(cutout_header.get(keyword, -1))
+        if -1 not in (epsf_index, cutout_index) and epsf_index != cutout_index:
+            raise ValueError(
+                f"ePSF {epsf_path} has {keyword} {epsf_index}, but cutout {cutout_path} has "
+                f"{cutout_index}"
+            )
+    if data.shape[0] != n_cadences:
+        raise ValueError(
+            f"ePSF {epsf_path} has {data.shape[0]} cadences, but cutout {cutout_path} has "
+            f"{n_cadences}"
+        )
+
+    sector = int(cutout_header["SECTOR"])
+    _add_epsf_throughput_keywords(
+        header,
+        reference_flux=get_reference_flux(gaia_table),
+        exposure=_recover_truncated_exposure(float(cutout_header["EXPOSURE"]), sector),
+        ccd_x=int(cutout_header["CCDX"]),
+        ccd_y=int(cutout_header["CCDY"]),
+        cutout_size=int(cutout_header["CUTSIZE"]),
+    )
+    date = Time.now()
+    date.precision = 0
+    header.add_history(
+        f"{'/'.join(EPSF_THROUGHPUT_KEYWORDS)} backfilled from {cutout_path.name} by tglc "
+        f"{TGLC_VERSION} on {date.fits}"
+    )
+    _atomic_write(fits.HDUList([fits.PrimaryHDU(data=data, header=header)]), epsf_path)
+    return True

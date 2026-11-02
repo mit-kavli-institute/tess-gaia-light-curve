@@ -5,10 +5,12 @@ from math import ceil, floor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import astropy.units as u
 from numba import jit
 import numpy as np
 
 from tglc.utils._optional_deps import HAS_CUPY
+from tglc.utils.constants import convert_tess_magnitude_to_tess_flux
 
 
 if TYPE_CHECKING:
@@ -412,6 +414,29 @@ def fit_epsf_for_source(
     return e_psf
 
 
+def get_reference_flux(gaia_catalog) -> float:
+    """
+    Catalog flux in e-/s of a star with flux ratio 1 in a cutout.
+
+    The design matrix scales each star by its `tess_flux_ratio` to the brightest catalog star in
+    the cutout (see `FFICutout.derive_catalogs`), so fitted PSF amplitudes are in units of this
+    star's flux.
+
+    Parameters
+    ----------
+    gaia_catalog : astropy.table.Table
+        The cutout's Gaia catalog (`FFICutout.gaia`), with `tess_mag` and `tess_flux_ratio`
+        columns.
+    """
+    flux_ratio = np.asarray(gaia_catalog["tess_flux_ratio"], dtype=np.float64)
+    tess_mag = np.asarray(gaia_catalog["tess_mag"], dtype=np.float64)
+    i = np.nanargmax(flux_ratio)
+    return float(
+        convert_tess_magnitude_to_tess_flux(tess_mag[i]).to_value(u.electron / u.second)
+        / flux_ratio[i]
+    )
+
+
 class EPSF:
     """
     Fitted-ePSF data product: per-cadence best-fit ePSF and background parameters for one FFI
@@ -431,6 +456,11 @@ class EPSF:
         cutout_x: int,
         cutout_y: int,
         background_columns: tuple[str, ...] = EPSF_BACKGROUND_COLUMNS,
+        reference_flux: float | None = None,
+        exposure: float | None = None,
+        ccd_x: int | None = None,
+        ccd_y: int | None = None,
+        cutout_size: int | None = None,
     ):
         """
         Parameters
@@ -451,6 +481,19 @@ class EPSF:
         background_columns : tuple[str, ...]
             Names of the background parameter columns appended after the PSF parameters. Defaults
             to :data:`EPSF_BACKGROUND_COLUMNS`.
+        reference_flux : float | None
+            Catalog flux in e-/s of a star with flux ratio 1 (the brightest catalog star of the
+            cutout), which sets the scale of the fitted PSF amplitudes. `None` for ePSFs fit
+            before it was recorded.
+        exposure : float | None
+            Exposure time per cadence of the cutout in seconds, or `None` if not recorded.
+        ccd_x, ccd_y : int | None
+            CCD coordinates of the cutout origin, or `None` if not recorded.
+        cutout_size : int | None
+            Side length in pixels of the cutout, or `None` if not recorded.
+
+        `reference_flux`, `exposure`, `ccd_x`, `ccd_y`, and `cutout_size` let
+        `tglc.epsf_throughput.EPSFThroughput` compute the ePSF flux fraction without the cutout.
         """
         array = np.asarray(array, dtype=np.float64)
         expected_columns = self.parameter_count(psf_size, oversample, len(background_columns))
@@ -470,6 +513,11 @@ class EPSF:
         self.cutout_x = int(cutout_x)
         self.cutout_y = int(cutout_y)
         self.background_columns = tuple(background_columns)
+        self.reference_flux = None if reference_flux is None else float(reference_flux)
+        self.exposure = None if exposure is None else float(exposure)
+        self.ccd_x = None if ccd_x is None else int(ccd_x)
+        self.ccd_y = None if ccd_y is None else int(ccd_y)
+        self.cutout_size = None if cutout_size is None else int(cutout_size)
 
     def __repr__(self) -> str:
         return (
@@ -628,6 +676,11 @@ class EPSF:
             ccd=cutout.ccd,
             cutout_x=cutout.cutout_x,
             cutout_y=cutout.cutout_y,
+            reference_flux=get_reference_flux(cutout.gaia),
+            exposure=cutout.exposure,
+            ccd_x=cutout.ccd_x,
+            ccd_y=cutout.ccd_y,
+            cutout_size=cutout.size,
         )
 
     @classmethod

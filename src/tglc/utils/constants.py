@@ -32,6 +32,13 @@ TESS pixel saturation level, from the TESS Instrument Handbook, p37.
 See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
 """
 
+TESS_ZERO_POINT_FLUX = 15_000 * u.electron / u.second
+"""
+Flux of a star of TESS magnitude 10, from the TESS Instrument Handbook, p37.
+
+See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
+"""
+
 GAIA_DR3_DESIGNATION_PREFIX = "Gaia DR3 "
 """Prefix of the ``designation`` column in Gaia DR3 catalog tables."""
 
@@ -95,7 +102,7 @@ def convert_tess_flux_to_tess_magnitude(flux: u.Quantity) -> npt.ArrayLike:
     $$
     See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
     """
-    return (-2.5 * np.log10(flux / (15_000 * u.electron / u.second)) + 10).value
+    return (-2.5 * np.log10(flux / TESS_ZERO_POINT_FLUX) + 10).value
 
 
 def convert_tess_magnitude_to_tess_flux(magnitude: npt.ArrayLike) -> u.Quantity:
@@ -110,7 +117,7 @@ def convert_tess_magnitude_to_tess_flux(magnitude: npt.ArrayLike) -> u.Quantity:
     See <https://archive.stsci.edu/missions/tess/doc/TESS_Instrument_Handbook_v0.1.pdf#page=38>.
     """
     magnitude = np.asanyarray(magnitude)
-    return (15_000 * u.electron / u.second) * 10 ** ((magnitude - 10) / -2.5)
+    return TESS_ZERO_POINT_FLUX * 10 ** ((magnitude - 10) / -2.5)
 
 
 def get_exposure_time_from_sector(sector: int) -> u.Quantity:

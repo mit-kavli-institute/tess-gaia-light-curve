@@ -309,6 +309,18 @@ def parse_tglc_args() -> argparse.Namespace:
         "curves for every target in the cutout's TIC catalog.",
     )
 
+    # TEMPORARY command for adding the ePSF throughput keywords to existing ePSF products: remove
+    # along with src/tglc/scripts/backfill_epsf_headers.py once they have been backfilled.
+    tglc_commands.add_parser(
+        "backfill-epsf-headers",
+        description="TEMPORARY: add the throughput keywords (REFFLUX, EXPOSURE, CCDX, CCDY, "
+        "CUTSIZE) to ePSF files fit before they were recorded, using each ePSF's cutout. No "
+        "re-fit is done, and only the cutouts' headers and catalogs are read. Files that already "
+        "have all the keywords are skipped unless --replace is given.",
+        help="Add throughput keywords to existing ePSF files (temporary)",
+        parents=[command_base_parser],
+    )
+
     args = tglc_parser.parse_args()
 
     # Custom post-parsing logic
