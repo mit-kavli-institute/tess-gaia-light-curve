@@ -11,7 +11,10 @@ The factor is a time series, so it is not stored in every light curve file. :cla
 recomputes it on demand from the ePSF data product alone (which records the reference flux,
 exposure, and cutout geometry; older ePSF files also need their cutout). The correction first
 undoes the additive normalization, then divides the factor out of the un-normalized aperture flux:
-dividing it out of the normalized flux instead would count the median deficit twice.
+dividing it out of the normalized flux instead would count the median deficit twice. Corrected
+magnitudes describe the whole star: the light curve's aperture flux portions only count the flux
+inside the 5x5 light curve window, so they are scaled by the window's share of the full PSF
+footprint.
 
 Because each star's design-matrix contribution is scaled by its catalog flux ratio to the
 brightest star in the cutout, the modeled target flux divided by the target's catalog flux does not
@@ -32,6 +35,7 @@ from tglc.aperture_light_curve import LIGHT_CURVE_APERTURES, ApertureLightCurve
 from tglc.epsf import EPSF, get_reference_flux
 from tglc.ffi import FFICutout
 from tglc.io import read_cutout_fits, read_epsf_fits
+from tglc.light_curve import LIGHT_CURVE_CUTOUT_SIZE, get_cutout_window
 from tglc.utils.constants import (
     TESSJD,  # noqa: F401 imported to register the tjd time format
     convert_tess_flux_to_tess_magnitude,
@@ -41,17 +45,17 @@ from tglc.utils.constants import (
 logger = logging.getLogger(__name__)
 
 
-def _shift_into_footprint_frame(coordinate: float, half_size: int) -> float:
+def _footprint_frame_shift(coordinate: float, half_size: int) -> int:
     """
-    Shift a coordinate by an even integer so its nearest pixel is `half_size + 1` or `+ 2`.
+    Even integer to subtract from a coordinate so its nearest pixel is `half_size + 1` or `+ 2`.
 
     The shifted star's full PSF footprint then fits in an image of side `2 * half_size + 4`. The
     shift is even so that the rounding of exact half-pixel positions (banker's rounding in
-    `tglc.epsf.make_tglc_design_matrix`) picks the same footprint as at the original position.
+    `tglc.epsf.make_tglc_design_matrix` and `tglc.light_curve.get_cutout_window`) picks the same
+    pixels as at the original position.
     """
     shift = round(coordinate) - (half_size + 1)
-    shift -= shift % 2
-    return coordinate - shift
+    return shift - shift % 2
 
 
 def _undo_normalization(normalized_flux: np.ndarray, local_background: float) -> np.ndarray:
@@ -202,6 +206,40 @@ class EPSFThroughput:
         """Catalog flux in electrons per cadence of a star with flux ratio 1."""
         return (self.reference_flux * self.exposure_time).to_value(u.electron)
 
+    def _footprint_node_weights(self, x: float, y: float) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Total weight of each PSF node over a star's full footprint and over its light curve window.
+
+        Summing the design matrix over pixels first gives each PSF node's total weight, so a
+        per-cadence model total is a single matrix-vector product with the PSF parameters.
+
+        Returns
+        -------
+        full_weights, window_weights : array
+            1D arrays with one entry per PSF parameter.
+        """
+        half_size = (self.epsf.psf_size - 1) // 2
+        footprint_side = 2 * half_size + 4
+        shift_x = _footprint_frame_shift(x, half_size)
+        shift_y = _footprint_frame_shift(y, half_size)
+        design_matrix, _ = self.epsf.make_design_matrix(
+            (footprint_side, footprint_side),
+            np.array([[x - shift_x, y - shift_y]]),
+            np.array([1.0]),
+        )
+        pixel_weights = design_matrix.reshape(footprint_side, footprint_side, -1)
+        # The light curve window is taken from the cutout around the star's nearest pixel; in the
+        # footprint frame it is moved by the same shift. Pixels outside the footprint image hold
+        # no PSF weight, so clipping the window to it loses nothing.
+        window = get_cutout_window(
+            x, y, (self.cutout_size, self.cutout_size), LIGHT_CURVE_CUTOUT_SIZE
+        )
+        window_pixel_weights = pixel_weights[
+            max(window.bottom - shift_y, 0) : max(window.top - shift_y, 0),
+            max(window.left - shift_x, 0) : max(window.right - shift_x, 0),
+        ]
+        return pixel_weights.sum(axis=(0, 1)), window_pixel_weights.sum(axis=(0, 1))
+
     def flux_fraction(self, x: float, y: float) -> np.ndarray:
         """
         Fraction of a star's catalog-expected flux captured by the ePSF model in each cadence.
@@ -216,29 +254,37 @@ class EPSFThroughput:
         flux_fraction : array
             1D array with one entry per cadence. NaN for cadences whose ePSF fit failed.
         """
-        half_size = (self.epsf.psf_size - 1) // 2
-        footprint_side = 2 * half_size + 4
-        design_matrix, _ = self.epsf.make_design_matrix(
-            (footprint_side, footprint_side),
-            np.array(
-                [
-                    [
-                        _shift_into_footprint_frame(x, half_size),
-                        _shift_into_footprint_frame(y, half_size),
-                    ]
-                ]
-            ),
-            np.array([1.0]),
-        )
-        # Summing the design matrix over pixels first gives each PSF node's total weight, so the
-        # per-cadence model total is a single matrix-vector product.
-        return (
-            self.epsf.psf_parameters @ design_matrix.sum(axis=0) / self.reference_flux_per_cadence
+        full_weights, _ = self._footprint_node_weights(x, y)
+        return self.epsf.psf_parameters @ full_weights / self.reference_flux_per_cadence
+
+    def window_fraction(self, x: float, y: float) -> float:
+        """
+        Fraction of a star's modeled flux inside its light curve window.
+
+        The light curve's aperture flux portions (`fluxportion` in HDF5 files) are normalized to
+        the target model inside the light curve window (see `tglc.light_curve.get_psf_portion`),
+        so they treat the window as holding all of the star's flux. Multiplying them by this
+        fraction gives the aperture's portion of the full PSF footprint. Like the flux portions,
+        the fraction is static: the model is summed over all cadences, ignoring failed fits.
+
+        Parameters
+        ----------
+        x, y : float
+            Position of the star in the cutout frame (as in `FFICutout.star_positions`).
+        """
+        full_weights, window_weights = self._footprint_node_weights(x, y)
+        psf_parameters = self.epsf.psf_parameters
+        return float(
+            np.nansum(psf_parameters @ window_weights) / np.nansum(psf_parameters @ full_weights)
         )
 
     def flux_fraction_at_ccd(self, ccd_x: float, ccd_y: float) -> np.ndarray:
         """:meth:`flux_fraction` for a star at a CCD position (as in light curve metadata)."""
         return self.flux_fraction(ccd_x - self.ccd_x, ccd_y - self.ccd_y)
+
+    def window_fraction_at_ccd(self, ccd_x: float, ccd_y: float) -> float:
+        """:meth:`window_fraction` for a star at a CCD position (as in light curve metadata)."""
+        return self.window_fraction(ccd_x - self.ccd_x, ccd_y - self.ccd_y)
 
     @staticmethod
     def correct_flux(raw_flux, flux_fraction: np.ndarray):
@@ -264,7 +310,12 @@ class EPSFThroughput:
         flux_fraction: np.ndarray,
         flux_portion: float,
     ) -> tuple[u.Quantity, np.ndarray]:
-        """Corrected flux (electrons) and the TESS magnitude it implies for the whole star."""
+        """
+        Corrected flux (electrons) and the TESS magnitude it implies for the whole star.
+
+        `flux_portion` is the aperture's portion of the star's full PSF footprint: the light curve
+        flux portion times :meth:`window_fraction`.
+        """
         flux = self.correct_flux(raw_flux, flux_fraction)
         # Non-positive flux has no magnitude; NaN matches the normalized product's convention.
         positive_flux = np.where(flux > 0, flux, np.nan * u.electron)
@@ -318,8 +369,10 @@ class EPSFThroughput:
         Returns a copy of `light_curve` with an added `epsf_flux_fraction` column. Each
         `*_aperture_flux` column is replaced by the un-normalized aperture flux (the normalized
         flux plus the local background) divided by the flux fraction, and each
-        `*_aperture_magnitude` column by the TESS magnitude that flux implies for the whole star.
-        Cadences clipped as non-positive during normalization stay NaN.
+        `*_aperture_magnitude` column by the TESS magnitude that flux implies for the whole star,
+        counting the PSF wings outside the light curve window (:meth:`window_fraction`, recorded
+        as the `epsf_window_fraction` table metadata). Cadences clipped as non-positive during
+        normalization stay NaN.
 
         Raises
         ------
@@ -340,15 +393,19 @@ class EPSFThroughput:
             n_cadences=len(light_curve),
         )
         flux_fraction = self.flux_fraction_at_ccd(meta["ccd_x"], meta["ccd_y"])
+        window_fraction = self.window_fraction_at_ccd(meta["ccd_x"], meta["ccd_y"])
         corrected = light_curve.copy()
         corrected["epsf_flux_fraction"] = flux_fraction
+        corrected.meta["epsf_window_fraction"] = window_fraction
         for aperture_name, _ in LIGHT_CURVE_APERTURES:
             raw_flux = _undo_normalization(
                 u.Quantity(corrected[f"{aperture_name}_aperture_flux"], u.electron),
                 u.Quantity(meta[f"{aperture_name}_aperture_local_background"], u.electron),
             )
             flux, magnitude = self._correct_aperture(
-                raw_flux, flux_fraction, meta[f"{aperture_name}_aperture_flux_portion"]
+                raw_flux,
+                flux_fraction,
+                meta[f"{aperture_name}_aperture_flux_portion"] * window_fraction,
             )
             corrected[f"{aperture_name}_aperture_flux"] = flux
             corrected[f"{aperture_name}_aperture_magnitude"] = magnitude
@@ -366,7 +423,8 @@ class EPSFThroughput:
         light_curve : QTable
             Table with `time` (TDB, TJD format), `cadence`, `quality_flag`, `background_flux`,
             `epsf_flux_fraction`, and per-aperture corrected `{aperture}_aperture_flux` (electrons)
-            and `{aperture}_aperture_magnitude` columns.
+            and `{aperture}_aperture_magnitude` columns. The metadata records the
+            `epsf_window_fraction`.
 
         Raises
         ------
@@ -400,6 +458,7 @@ class EPSFThroughput:
                 n_cadences=len(bjd),
             )
             flux_fraction = self.flux_fraction_at_ccd(float(x[0]), float(y[0]))
+            window_fraction = self.window_fraction_at_ccd(float(x[0]), float(y[0]))
             table = QTable(
                 {
                     "time": Time(bjd, format="tjd", scale="tdb"),
@@ -407,7 +466,8 @@ class EPSFThroughput:
                     "quality_flag": light_curve_group["QualityFlag"][()],
                     "background_flux": light_curve_group["Background/Value"][()],
                     "epsf_flux_fraction": flux_fraction,
-                }
+                },
+                meta={"epsf_window_fraction": window_fraction},
             )
             for aperture_name, _ in LIGHT_CURVE_APERTURES:
                 aperture_group = light_curve_group["AperturePhotometry"][
@@ -416,7 +476,7 @@ class EPSFThroughput:
                 flux, magnitude = self._correct_aperture(
                     read_hdf5_raw_flux(file, aperture_name),
                     flux_fraction,
-                    float(aperture_group.attrs["fluxportion"]),
+                    float(aperture_group.attrs["fluxportion"]) * window_fraction,
                 )
                 table[f"{aperture_name}_aperture_flux"] = flux
                 table[f"{aperture_name}_aperture_magnitude"] = magnitude

@@ -20,9 +20,12 @@ from tglc.epsf_throughput import EPSFThroughput, read_hdf5_raw_flux
 from tglc.io import write_epsf_fits
 from tglc.light_curve import (
     LIGHT_CURVE_APERTURES,
+    LIGHT_CURVE_CUTOUT_SIZE,
     evaluate_epsf_model,
     generate_light_curves,
     get_cutout_for_light_curve,
+    get_cutout_window,
+    get_psf_portion,
     make_target_design_matrix,
 )
 from tglc.utils.constants import convert_tess_flux_to_tess_magnitude
@@ -249,6 +252,110 @@ def test_flux_fraction_at_ccd_subtracts_cutout_origin():
     )
 
 
+#######################################################################
+#### Window fraction ##################################################
+#######################################################################
+
+
+def _full_and_window_target_models(epsf: EPSF, cutout_size: int, x: float, y: float):
+    """Target-only models over the full footprint and over the light curve window (oracle)."""
+    shift = 20  # even, so half-pixel rounding is unchanged
+    full_shape = (cutout_size + 2 * shift, cutout_size + 2 * shift)
+    full_model = evaluate_epsf_model(
+        make_target_design_matrix(epsf, full_shape, x + shift, y + shift, 1.0),
+        epsf.psf_parameters,
+        full_shape,
+    )
+    window = get_cutout_window(x, y, (cutout_size, cutout_size), LIGHT_CURVE_CUTOUT_SIZE)
+    window_model = evaluate_epsf_model(
+        make_target_design_matrix(epsf, window.shape, x - window.left, y - window.bottom, 1.0),
+        epsf.psf_parameters,
+        window.shape,
+    )
+    return full_model, window_model
+
+
+@pytest.mark.parametrize("psf_size", [9, 11])
+@pytest.mark.parametrize(
+    "position",
+    # Interior, half-pixel (banker's rounding), and edge positions whose window is clamped.
+    [(5.3, 6.8), (2.5, 3.5), (6.5, 7.5), (0.2, 5.0), (11.4, 11.6), (-0.4, 1.5)],
+)
+def test_window_fraction_matches_window_and_full_footprint_models(psf_size, position):
+    rng = np.random.default_rng(seed=psf_size)
+    array = rng.uniform(0, 1, (3, EPSF.parameter_count(psf_size, OVERSAMPLE)))
+    array[1] = np.nan  # failed fits are ignored, as in get_psf_portion
+    epsf = EPSF(
+        array, psf_size=psf_size, oversample=OVERSAMPLE, orbit=1, sector=1, camera=1, ccd=1,
+        cutout_x=0, cutout_y=0,
+    )  # fmt: skip
+    cutout_size = 12
+    throughput = EPSFThroughput(epsf, **{**THROUGHPUT_KWARGS, "cutout_size": cutout_size})
+    x, y = position
+    full_model, window_model = _full_and_window_target_models(epsf, cutout_size, x, y)
+
+    window_fraction = throughput.window_fraction(x, y)
+
+    np.testing.assert_allclose(
+        window_fraction, np.nansum(window_model) / np.nansum(full_model), rtol=1e-12
+    )
+    # Scaling a light curve flux portion by the window fraction gives the aperture's portion of
+    # the full footprint.
+    aperture_limits = get_aperture_limits(3, round(x), round(y), cutout_size, cutout_size)
+    window = get_cutout_window(x, y, (cutout_size, cutout_size), LIGHT_CURVE_CUTOUT_SIZE)
+    bottom, top, left, right = aperture_limits
+    full_window_model = np.zeros((cutout_size, cutout_size))
+    full_window_model[window.bottom : window.top, window.left : window.right] = np.nansum(
+        window_model, axis=0
+    )
+    np.testing.assert_allclose(
+        get_flux_portion_in_aperture(get_psf_portion(window_model), (
+            bottom - window.bottom, top - window.bottom, left - window.left, right - window.left
+        )) * window_fraction,
+        full_window_model[bottom:top, left:right].sum() / np.nansum(full_model),
+        rtol=1e-12,
+    )  # fmt: skip
+
+
+@settings(deadline=None)
+@given(
+    x=st.floats(-0.5, 150, allow_nan=False),
+    y=st.floats(-0.5, 150, allow_nan=False),
+    scale=st.floats(1e-3, 1e3),
+)
+def test_window_fraction_is_a_scale_free_fraction(x, y, scale):
+    _, epsf = _make_cutout_and_epsf()
+    window_fraction = EPSFThroughput(epsf, **THROUGHPUT_KWARGS).window_fraction(x, y)
+    assert 0 < window_fraction <= 1
+    np.testing.assert_allclose(
+        EPSFThroughput(_make_epsf(epsf.array * scale), **THROUGHPUT_KWARGS).window_fraction(x, y),
+        window_fraction,
+        rtol=1e-12,
+    )
+
+
+def test_window_fraction_is_one_for_psf_inside_the_window():
+    # Only the PSF nodes within half a pixel of the star are nonzero, so the star's light falls
+    # in its nearest 2x2 pixels, all inside the 5x5 window.
+    grid_side = PSF_SIZE * OVERSAMPLE + 1
+    psf = np.zeros((grid_side, grid_side))
+    center = grid_side // 2
+    psf[center - 1 : center + 2, center - 1 : center + 2] = 1.0
+    array = np.zeros((2, EPSF.parameter_count(PSF_SIZE, OVERSAMPLE)))
+    array[:, : grid_side**2] = psf.ravel()
+    throughput = EPSFThroughput(_make_epsf(array), **THROUGHPUT_KWARGS)
+    assert throughput.window_fraction(40.2, 60.7) == pytest.approx(1.0, rel=1e-12)
+
+
+def test_window_fraction_at_ccd_subtracts_cutout_origin():
+    cutout, epsf = _make_cutout_and_epsf()
+    throughput = EPSFThroughput.from_cutout(epsf, cutout)
+    x, y = cutout.star_positions[1]
+    assert throughput.window_fraction_at_ccd(
+        x + cutout.ccd_x, y + cutout.ccd_y
+    ) == throughput.window_fraction(x, y)
+
+
 def _make_injected_throughput_cutout(throughput: np.ndarray):
     """Noise-free cutout whose stars deliver `throughput[t]` of their catalog flux, plus its fit.
 
@@ -333,13 +440,22 @@ def test_correction_removes_time_varying_throughput(monkeypatch):
     corrected_flux = corrected["primary_aperture_flux"].to_value(u.electron)
     # What remains is the fit's ~0.1% bias (see test_flux_fraction_recovers_injected_throughput).
     assert np.ptp(corrected_flux) / np.mean(corrected_flux) < 5e-3
-    # The corrected flux sits at the catalog-expected aperture flux, up to the light curve's 5x5
-    # flux-portion approximation (a constant, target-dependent factor of a few percent).
+    # The corrected flux sits at the catalog-expected flux in the aperture, counting the PSF wings
+    # outside the light curve window, so the corrected magnitude is the catalog magnitude.
+    window_fraction = corrected.meta["epsf_window_fraction"]
+    assert window_fraction < 0.99  # the wings matter at this PSF width
     expected_aperture_flux = (
         get_expected_total_flux(light_curve.meta["tess_magnitude"], cutout.exposure)
         * light_curve.meta["primary_aperture_flux_portion"]
+        * window_fraction
     )
-    np.testing.assert_allclose(corrected_flux, expected_aperture_flux, rtol=0.1)
+    np.testing.assert_allclose(corrected_flux, expected_aperture_flux, rtol=5e-3)
+    np.testing.assert_allclose(
+        corrected["primary_aperture_magnitude"],
+        light_curve.meta["tess_magnitude"],
+        rtol=0,
+        atol=5e-3,
+    )
 
 
 @given(
@@ -376,14 +492,16 @@ def light_curves(monkeypatch):
     return cutout, epsf, list(generate_light_curves(cutout, epsf, Path("/nonexistent")))
 
 
-def _expected_correction(throughput, light_curve, aperture_name, fraction):
+def _expected_correction(throughput, light_curve, aperture_name, fraction, window_fraction):
     raw_flux = (
         light_curve[f"{aperture_name}_aperture_flux"]
         + light_curve.meta[f"{aperture_name}_aperture_local_background"]
     )
     flux = raw_flux / fraction
     magnitude = convert_tess_flux_to_tess_magnitude(
-        flux / light_curve.meta[f"{aperture_name}_aperture_flux_portion"] / throughput.exposure_time
+        flux
+        / (light_curve.meta[f"{aperture_name}_aperture_flux_portion"] * window_fraction)
+        / throughput.exposure_time
     )
     return flux, magnitude
 
@@ -396,9 +514,13 @@ def test_correct_light_curve_divides_out_flux_fraction(light_curves):
 
     # The light curve's CCD position maps back to the target's cutout position.
     fraction = throughput.flux_fraction(*cutout.star_positions[0])
+    window_fraction = throughput.window_fraction(*cutout.star_positions[0])
     np.testing.assert_allclose(corrected["epsf_flux_fraction"], fraction, rtol=1e-12)
+    assert corrected.meta["epsf_window_fraction"] == window_fraction
     for aperture_name, _ in LIGHT_CURVE_APERTURES:
-        flux, magnitude = _expected_correction(throughput, light_curve, aperture_name, fraction)
+        flux, magnitude = _expected_correction(
+            throughput, light_curve, aperture_name, fraction, window_fraction
+        )
         np.testing.assert_allclose(corrected[f"{aperture_name}_aperture_flux"], flux, rtol=1e-12)
         np.testing.assert_allclose(
             corrected[f"{aperture_name}_aperture_magnitude"], magnitude, rtol=1e-12
@@ -564,6 +686,7 @@ def test_correct_hdf5_matches_correct_light_curve(light_curves, tmp_path):
     np.testing.assert_allclose(
         from_file["epsf_flux_fraction"], in_memory["epsf_flux_fraction"], rtol=1e-12
     )
+    assert from_file.meta["epsf_window_fraction"] == in_memory.meta["epsf_window_fraction"]
     for aperture_name, _ in LIGHT_CURVE_APERTURES:
         np.testing.assert_allclose(
             from_file[f"{aperture_name}_aperture_flux"],
