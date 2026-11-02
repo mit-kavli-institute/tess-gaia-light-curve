@@ -31,6 +31,9 @@ from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
 logger = logging.getLogger(__name__)
 
+LIGHT_CURVE_CUTOUT_SIZE = 5
+"""Side length in pixels of the decontaminated window around each target used for photometry."""
+
 
 class CutoutWindow(NamedTuple):
     """Edge-clamped pixel window of a cutout within a larger image."""
@@ -501,7 +504,7 @@ def generate_light_curves(
             star_positions[i][0],
             star_positions[i][1],
             source.gaia["tess_flux_ratio"].data[i],
-            cutout_size=5,
+            cutout_size=LIGHT_CURVE_CUTOUT_SIZE,
         )
 
         sky_coord = SkyCoord(source.gaia["ra"][i], source.gaia["dec"][i], unit="deg")

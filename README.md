@@ -84,7 +84,11 @@ throughput = EPSFThroughput.from_fits("epsf/epsf_0_0.fits")
 corrected = throughput.correct_hdf5("LC/123456789.h5")
 ```
 
-`corrected` has `time`, `cadence`, `quality_flag`, `background_flux` and `epsf_flux_fraction` columns. It also has, per aperture, the corrected flux (`raw_flux / epsf_flux_fraction`, in electrons) and the TESS magnitude that flux implies for the whole star. Both methods refuse a light curve that wasn't extracted from the ePSF's cutout. `EPSFThroughput.correct_light_curve` does the same for an in-memory `ApertureLightCurve`.
+`corrected` has `time`, `cadence`, `quality_flag`, `background_flux` and `epsf_flux_fraction` columns. It also has, per aperture, the corrected flux (`raw_flux / epsf_flux_fraction`, in electrons) and the TESS magnitude that flux implies for the whole star.
+
+`fluxportion` counts only the target flux inside the 5×5 light curve window, so it treats the window as holding the whole star. To make the magnitude refer to the whole star, the correction scales `fluxportion` by the window's share of the full PSF footprint. With an 11-pixel PSF that share is typically about 0.92, and leaving it out would make the magnitudes about 0.09 mag too faint. The share is recorded as `corrected.meta["epsf_window_fraction"]`.
+
+Both methods refuse a light curve that wasn't extracted from the ePSF's cutout. `EPSFThroughput.correct_light_curve` does the same for an in-memory `ApertureLightCurve`.
 
 ePSF files written before these keywords existed also need their cutout: `EPSFThroughput.from_fits(epsf_path, cutout_path)`.
 
