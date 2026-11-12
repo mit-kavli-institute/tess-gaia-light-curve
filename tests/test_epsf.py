@@ -1,3 +1,7 @@
+import functools
+import warnings
+
+from hypothesis import given, strategies as st
 import numpy as np
 import pytest
 
@@ -5,6 +9,7 @@ from tglc.epsf import (
     EPSF,
     EPSF_BACKGROUND_COLUMNS,
     fit_epsf,
+    fit_epsf_for_source,
     get_default_epsf_flux_mask,
     get_xy_coordinates_centered_at_zero,
     make_tglc_design_matrix,
@@ -342,6 +347,50 @@ def test_epsf_from_cutout_fit():
     assert epsf.matches_cutout(cutout)
 
 
+def _fit_synthetic_cutout(cutout) -> np.ndarray:
+    return fit_epsf_for_source(cutout, 3, 1, 1e-4, 1.4, use_gpu=False)
+
+
+@functools.cache
+def _unmodified_synthetic_cutout_fit() -> np.ndarray:
+    return _fit_synthetic_cutout(make_synthetic_cutout())
+
+
+@given(
+    cadence_states=st.lists(
+        st.sampled_from(["positive", "negative", "zero", "nan"]), min_size=5, max_size=5
+    ),
+    # Synthetic flux is ~100 +/- 5, so any offset in this range makes the whole frame negative
+    negative_offset=st.floats(min_value=200.0, max_value=1e6),
+)
+def test_fit_epsf_for_source_skips_non_positive_median_cadences(
+    cadence_states: list[str], negative_offset: float
+):
+    """Scattered-light frames (median flux <= 0 or NaN) are rows of NaN; other fits are untouched."""
+    cutout = make_synthetic_cutout(n_cadences=len(cadence_states))
+    for i, state in enumerate(cadence_states):
+        if state == "negative":
+            cutout.flux[i] -= negative_offset
+            # A few exact zeros among negative pixels, as in real scattered-light frames
+            cutout.flux[i, 0, :3] = 0.0
+        elif state == "zero":
+            cutout.flux[i] = 0.0
+        elif state == "nan":
+            cutout.flux[i] = np.nan
+
+    with warnings.catch_warnings():
+        # The warnings that fitting these frames used to produce
+        warnings.filterwarnings("error", message="divide by zero", category=RuntimeWarning)
+        warnings.filterwarnings("error", message="invalid value", category=RuntimeWarning)
+        # np.nanmedian of an all-NaN frame
+        warnings.filterwarnings("ignore", message="All-NaN slice", category=RuntimeWarning)
+        epsf = _fit_synthetic_cutout(cutout)
+
+    skipped = np.array([state != "positive" for state in cadence_states])
+    assert np.isnan(epsf[skipped]).all()
+    np.testing.assert_array_equal(epsf[~skipped], _unmodified_synthetic_cutout_fit()[~skipped])
+
+
 # ---------------------------------------------------------------------
 # Characterization tests pinning pre-refactor fit_epsf masking behavior
 # ---------------------------------------------------------------------
@@ -395,6 +444,28 @@ def test_fit_epsf_nan_pixel_is_not_masked():
         design_matrix, flux, mask_nan_pixel, 1.4, regularization_extension_size
     )
     assert np.isfinite(masked_result).all()
+
+
+def test_fit_epsf_masked_zero_flux_pixel_does_not_warn():
+    """A zero-flux pixel dropped by the mask must not leak its infinite weight into the fit.
+
+    The mask is applied before the uncertainty weights are computed, so the fit is finite and
+    raises no divide-by-zero / invalid-value RuntimeWarnings.
+    """
+    design_matrix, regularization_extension_size, flux = _small_fit_problem()
+    flux[0, 0] = 0.0  # below 0.8 * median, so removed by the default mask
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        result = fit_epsf(
+            design_matrix,
+            flux,
+            np.zeros(flux.shape, dtype=bool),
+            1.4,
+            regularization_extension_size,
+        )
+
+    assert np.isfinite(result).all()
 
 
 def test_get_default_epsf_flux_mask():

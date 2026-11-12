@@ -11,12 +11,14 @@ import multiprocessing
 from pathlib import Path
 import re
 
+import numpy as np
+
 from tglc.epsf import EPSF
 from tglc.ffi import FFICutout
 from tglc.io import read_cutout_fits
 from tglc.utils._optional_deps import HAS_CUPY
 from tglc.utils.manifest import Manifest
-from tglc.utils.mapping import consume_iterator_with_progress_bar, pool_map_if_multiprocessing
+from tglc.utils.mapping import iterate_with_progress_bar, pool_map_if_multiprocessing
 
 
 logger = logging.getLogger(__name__)
@@ -39,11 +41,19 @@ def read_source_and_fit_and_save_epsf(
     unpacks I/O file paths from first argument.
 
     Most arguments are passed to `fit_epsf_for_source`.
+
+    Returns
+    -------
+    unfit_cadence_summary : tuple[str, int, int, int, int] | None
+        `(source file name, cadences without a fit, total cadences, first unfit cadence index, last
+        unfit cadence index)`, with both indices `-1` if every cadence was fit. `None` if the ePSF
+        file already exists and was not replaced. Returned rather than logged so that the parent
+        process can report it: log records from "spawn" pool workers are dropped.
     """
     source_file, epsf_output_file = source_and_epsf_files
     if not replace and epsf_output_file.is_file():
         logger.debug(f"ePSF file {epsf_output_file.resolve()} exists and will not be overwritten")
-        return
+        return None
     source: FFICutout = read_cutout_fits(source_file)
 
     process_name = multiprocessing.current_process().name
@@ -85,6 +95,17 @@ def read_source_and_fit_and_save_epsf(
             use_gpu=use_gpu,
         )
     epsf.to_fits(epsf_output_file)
+
+    unfit_cadences = np.nonzero(epsf.failed_cadence_mask)[0]
+    if len(unfit_cadences) == 0:
+        return (source_file.name, 0, epsf.n_cadences, -1, -1)
+    return (
+        source_file.name,
+        len(unfit_cadences),
+        epsf.n_cadences,
+        int(unfit_cadences[0]),
+        int(unfit_cadences[-1]),
+    )
 
 
 def make_epsfs_main(args: argparse.Namespace):
@@ -131,9 +152,13 @@ def make_epsfs_main(args: argparse.Namespace):
             use_gpu=not args.no_gpu,
         )
         # For GPU multiprocessing, the "spawn" start method is necessary
-        # TODO logging from workers is ignored with the "spawn" method
+        # TODO logging from workers is ignored with the "spawn" method. Workers therefore return
+        # their unfit cadence counts, which are logged here in the parent process.
         mp_start_method = "spawn" if not args.no_gpu else None
-        consume_iterator_with_progress_bar(
+        unfit_cadence_total = 0
+        cutouts_with_unfit_cadences = 0
+        cutouts_fit = 0
+        for unfit_cadence_summary in iterate_with_progress_bar(
             pool_map_if_multiprocessing(
                 fit_and_save_epsf_with_argparse_args,
                 zip(ccd_source_files, ccd_epsf_files, strict=True),
@@ -144,7 +169,24 @@ def make_epsfs_main(args: argparse.Namespace):
             desc=f"Fitting ePSFs for {camera}-{ccd}",
             unit="cutout",
             total=len(ccd_source_files),
-        )
+        ):
+            if unfit_cadence_summary is None:
+                continue
+            cutouts_fit += 1
+            source_name, unfit_cadences, cadences, first_unfit, last_unfit = unfit_cadence_summary
+            if unfit_cadences > 0:
+                unfit_cadence_total += unfit_cadences
+                cutouts_with_unfit_cadences += 1
+                logger.warning(
+                    f"{source_name}: {unfit_cadences} of {cadences} cadences have no ePSF fit"
+                    " (non-positive median flux or solver error), cadence indices"
+                    f" {first_unfit}-{last_unfit}"
+                )
+        if unfit_cadence_total > 0:
+            logger.info(
+                f"ePSFs for {camera}-{ccd}: {unfit_cadence_total} cadences without a fit across"
+                f" {cutouts_with_unfit_cadences} of {cutouts_fit} cutouts"
+            )
 
 
 if __name__ == "__main__":
