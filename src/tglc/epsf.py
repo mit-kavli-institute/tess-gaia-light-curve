@@ -296,16 +296,19 @@ def fit_epsf(
     epsf_parameters : array
         Array of best-fit ePSF parameters.
     """
-    flux_uncertainty_scale = 1 / (np.abs(flux) ** flux_uncertainty_power)
     if flux_mask is None:
         flux_mask = get_default_epsf_flux_mask(flux, base_flux_mask)
 
+    # Apply the mask before computing uncertainty weights, so that masked zero-flux pixels (which
+    # would have infinite weight) never enter the arithmetic.
+    unmasked_pixels = ~flux_mask.flatten()
+    unmasked_flux = flux.flatten()[unmasked_pixels]
+    flux_uncertainty_scale = 1 / (np.abs(unmasked_flux) ** flux_uncertainty_power)
+
     # Set up observed vector accounting for regularization
-    observed_vector = np.hstack((flux.flatten(), np.zeros(regularization_dimensions)))
-    uncertainty_scale = np.hstack(
-        (flux_uncertainty_scale.flatten(), np.ones(regularization_dimensions))
-    )
-    mask = np.hstack((flux_mask.flatten(), np.zeros(regularization_dimensions, dtype=bool)))
+    observed_vector = np.hstack((unmasked_flux, np.zeros(regularization_dimensions)))
+    uncertainty_scale = np.hstack((flux_uncertainty_scale, np.ones(regularization_dimensions)))
+    unmasked = np.hstack((unmasked_pixels, np.ones(regularization_dimensions, dtype=bool)))
 
     if HAS_CUPY:
         import cupy as cp
@@ -314,8 +317,8 @@ def fit_epsf(
     else:
         xp = np
 
-    A = (design_matrix * uncertainty_scale[:, np.newaxis])[~mask]
-    b = (observed_vector * uncertainty_scale)[~mask]
+    A = design_matrix[unmasked] * uncertainty_scale[:, np.newaxis]
+    b = observed_vector * uncertainty_scale
 
     try:
         # Solve the normal equation instead of running a least squares fit directly. This is much
@@ -363,7 +366,15 @@ def fit_epsf_for_source(
     -------
     epsf : array
         2D array where first dimension corresponds to cadences in `source` and second dimension
-        contains the best-fit ePSF parameters per cadence.
+        contains the best-fit ePSF parameters per cadence. Cadences that are skipped (see Notes) or
+        whose fit raises a linear algebra error are rows of NaN.
+
+    Notes
+    -----
+    Cadences whose median flux is not strictly positive (negative, zero, or NaN) are not fit. These
+    are frames dominated by scattered light, where the calibrated flux swings through zero: the
+    default mask in :func:`get_default_epsf_flux_mask` then keeps zero-flux pixels, whose infinite
+    weights make the fit NaN, or keeps mostly negative pixels and returns a meaningless ePSF.
     """
     logger.debug(
         f"Fitting ePSF for source in {source.camera}-{source.ccd} at {source.ccd_x}, {source.ccd_y}"
@@ -393,8 +404,14 @@ def fit_epsf_for_source(
         xp = np
 
     e_psf = xp.zeros((flux.shape[0], design_matrix.shape[1]))
+    skipped_cadences = 0
     # JIT-ing this loop using numba did not give much performance benefit. Maybe vectorizing would?
     for i in range(flux.shape[0]):
+        # `not median > 0` rather than `median <= 0` so that a NaN median is skipped too
+        if not np.nanmedian(flux[i]) > 0:
+            e_psf[i] = np.nan
+            skipped_cadences += 1
+            continue
         try:
             # fit_epsf will automatically use the appropriate lstsq method.
             e_psf[i] = fit_epsf(
@@ -407,6 +424,11 @@ def fit_epsf_for_source(
         except np.linalg.LinAlgError as e:
             logger.warning(f"Error while fitting ePSF: {e}")
             e_psf[i] = np.nan
+    if skipped_cadences > 0:
+        logger.debug(
+            f"Skipped ePSF fit for {skipped_cadences} of {flux.shape[0]} cadences with non-positive"
+            " median flux"
+        )
     if xp != np:
         e_psf = e_psf.get()
     return e_psf
@@ -438,7 +460,7 @@ class EPSF:
         array : array
             2D ``(t, k)`` array of best-fit ePSF + background parameters, where ``t`` is the
             number of cadences and ``k == parameter_count(psf_size, oversample)``. Coerced to a
-            float64 numpy array; cadences whose fit failed are rows of NaN.
+            float64 numpy array; cadences whose fit was skipped or failed are rows of NaN.
         psf_size : int
             Side length in pixels of the square PSF model.
         oversample : int
