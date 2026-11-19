@@ -13,7 +13,11 @@ from astropy.time import Time
 import astropy.units as u
 import numpy as np
 
-from tglc.aperture_light_curve import ApertureLightCurve, ApertureLightCurveMetadata
+from tglc.aperture_light_curve import (
+    LIGHT_CURVE_APERTURES,
+    ApertureLightCurve,
+    ApertureLightCurveMetadata,
+)
 from tglc.aperture_photometry import get_normalized_aperture_photometry
 from tglc.epsf import EPSF
 from tglc.ffi import FFICutout
@@ -27,9 +31,8 @@ from tglc.utils.tess_ephemeris import get_tess_spacecraft_position
 
 logger = logging.getLogger(__name__)
 
-
-LIGHT_CURVE_APERTURES = (("primary", 3), ("small", 1), ("large", 5))
-"""(name, side length) of the square apertures extracted for every light curve."""
+LIGHT_CURVE_CUTOUT_SIZE = 5
+"""Side length in pixels of the decontaminated window around each target used for photometry."""
 
 
 class CutoutWindow(NamedTuple):
@@ -501,7 +504,7 @@ def generate_light_curves(
             star_positions[i][0],
             star_positions[i][1],
             source.gaia["tess_flux_ratio"].data[i],
-            cutout_size=5,
+            cutout_size=LIGHT_CURVE_CUTOUT_SIZE,
         )
 
         sky_coord = SkyCoord(source.gaia["ra"][i], source.gaia["dec"][i], unit="deg")
@@ -545,6 +548,8 @@ def generate_light_curves(
             sector=source.sector,
             camera=source.camera,
             ccd=source.ccd,
+            cutout_x=source.cutout_x,
+            cutout_y=source.cutout_y,
             ccd_x=target_ccd_x,
             ccd_y=target_ccd_y,
             sky_coord=sky_coord,
@@ -558,6 +563,15 @@ def generate_light_curves(
             ],
             large_aperture_local_background=aperture_photometry_data[2].meta[
                 "large_aperture_local_background"
+            ],
+            primary_aperture_flux_portion=aperture_photometry_data[0].meta[
+                "primary_aperture_flux_portion"
+            ],
+            small_aperture_flux_portion=aperture_photometry_data[1].meta[
+                "small_aperture_flux_portion"
+            ],
+            large_aperture_flux_portion=aperture_photometry_data[2].meta[
+                "large_aperture_flux_portion"
             ],
         )
 
