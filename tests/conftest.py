@@ -4,9 +4,31 @@ from collections.abc import Generator
 import importlib
 from pathlib import Path
 
+import astropy.units as u
+import numpy as np
 import pytest
 
 from .sample_data import sample_ffis  # noqa: F401
+
+
+#######################################################################
+#### Light Curve Fixtures #############################################
+#######################################################################
+
+
+@pytest.fixture
+def fake_spacecraft_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pytest fixture that replaces the JPL Horizons spacecraft position query used by
+    `tglc.light_curve` with a zero position.
+
+    A zero position gives a zero barycentric light-time correction, so light curve times equal the
+    cutout's times.
+    """
+
+    def zero_spacecraft_position(orbit, time, ephemerides_directory):
+        return np.zeros((len(np.atleast_1d(time.tdb.jd)), 3)) * u.au
+
+    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", zero_spacecraft_position)
 
 
 #######################################################################

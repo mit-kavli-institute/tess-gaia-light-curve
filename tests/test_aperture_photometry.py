@@ -3,9 +3,14 @@ Tests for the tglc.aperture_photometry module, which provides a function for doi
 on image cutouts.
 """
 
+import warnings
+
 from astropy import units as u
+from hypothesis import given, strategies as st
+from hypothesis.extra import numpy as npst
 import numpy as np
 import pytest
+from scipy.ndimage import center_of_mass
 
 from tglc.aperture_photometry import (
     get_flux_portion_in_aperture,
@@ -259,6 +264,117 @@ def test_measure_aperture_centroids_row_major_with_offsets():
 
     # Row-major (y, x), offset back into full-image coordinates
     np.testing.assert_array_equal(centroids, [[3.0, 2.0]])
+
+
+def _oracle_aperture_centroids(images, aperture_limits):
+    """Per-cadence `scipy.ndimage.center_of_mass`, the definition the vectorized code must match."""
+    bottom, top, left, right = aperture_limits
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        centroids = np.array([center_of_mass(image[bottom:top, left:right]) for image in images])
+    centroids[:, 0] += bottom
+    centroids[:, 1] += left
+    return centroids
+
+
+@st.composite
+def _image_stacks_with_aperture_limits(draw):
+    n_cadences = draw(st.integers(1, 6))
+    height = draw(st.integers(1, 7))
+    width = draw(st.integers(1, 7))
+    images = draw(
+        npst.arrays(
+            np.float64,
+            (n_cadences, height, width),
+            # Strictly positive flux keeps the centroid well conditioned (no cancellation in the
+            # normalizing sum), so agreement can be asserted to tight relative tolerance.
+            elements=st.floats(min_value=1e-3, max_value=1e7),
+        )
+    )
+    bottom = draw(st.integers(0, height - 1))
+    top = draw(st.integers(bottom + 1, height))
+    left = draw(st.integers(0, width - 1))
+    right = draw(st.integers(left + 1, width))
+    return images, (bottom, top, left, right)
+
+
+@given(_image_stacks_with_aperture_limits())
+def test_measure_aperture_centroids_matches_center_of_mass(images_and_limits):
+    images, limits = images_and_limits
+
+    centroids = measure_aperture_centroids(images, limits)
+
+    assert centroids.shape == (images.shape[0], 2)
+    np.testing.assert_allclose(
+        centroids, _oracle_aperture_centroids(images, limits), rtol=1e-12, atol=0
+    )
+
+
+@given(
+    npst.arrays(
+        np.float64,
+        st.tuples(st.integers(1, 6), st.integers(1, 5), st.integers(1, 5)),
+        elements=st.floats(min_value=-1e7, max_value=1e7),
+    )
+)
+def test_measure_aperture_centroids_matches_center_of_mass_for_signed_flux(images):
+    """Decontaminated cutouts contain negative pixels, where the normalizing sum can nearly cancel.
+
+    The agreement tolerance is therefore scaled by the conditioning of each cadence's flux sum,
+    `sum(|flux|) / |sum(flux)|`; cadences whose sum cancels to zero are not finite in either
+    implementation.
+    """
+    limits = (0, images.shape[1], 0, images.shape[2])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        centroids = measure_aperture_centroids(images, limits)
+    oracle = _oracle_aperture_centroids(images, limits)
+
+    total = images.sum(axis=(1, 2))
+    finite = total != 0
+    np.testing.assert_array_equal(np.isfinite(centroids), np.isfinite(oracle))
+    condition = np.abs(images).sum(axis=(1, 2))[finite] / np.abs(total[finite])
+    tolerance = 1e-12 * condition[:, np.newaxis] * max(images.shape[1:])
+    assert (np.abs(centroids[finite] - oracle[finite]) <= tolerance).all()
+
+
+def test_measure_aperture_centroids_nan_pixel_only_affects_its_cadence_and_window():
+    rng = np.random.default_rng(seed=7)
+    images = rng.uniform(1.0, 10.0, size=(3, 5, 5))
+    limits = (1, 4, 1, 4)
+    clean_centroids = measure_aperture_centroids(images, limits)
+
+    images[0, 0, 0] = np.nan  # outside the window: no effect
+    images[1, 2, 2] = np.nan  # inside the window: that cadence's centroid is NaN
+    centroids = measure_aperture_centroids(images, limits)
+
+    assert np.isnan(centroids[1]).all()
+    np.testing.assert_array_equal(centroids[[0, 2]], clean_centroids[[0, 2]])
+
+
+def test_measure_aperture_centroids_zero_flux_window_is_not_finite():
+    images = np.ones((2, 4, 4))
+    images[1] = 0.0
+    limits = (0, 3, 1, 4)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        centroids = measure_aperture_centroids(images, limits)
+
+    np.testing.assert_array_equal(centroids[0], [1.0, 2.0])
+    assert not np.isfinite(centroids[1]).any()
+
+
+def test_measure_aperture_centroids_float32_images():
+    rng = np.random.default_rng(seed=11)
+    images = rng.uniform(1.0, 1e4, size=(4, 6, 6)).astype(np.float32)
+    limits = (1, 6, 0, 5)
+
+    centroids = measure_aperture_centroids(images, limits)
+
+    assert centroids.dtype == np.float64
+    np.testing.assert_allclose(centroids, _oracle_aperture_centroids(images, limits), rtol=1e-6)
 
 
 def test_get_saturation_mask_uses_nominal_aperture_area():

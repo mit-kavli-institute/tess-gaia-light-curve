@@ -5,7 +5,7 @@ import astropy.units as u
 from astropy.wcs import WCS
 import numpy as np
 
-from tglc.epsf import EPSF_BACKGROUND_COLUMNS
+from tglc.epsf import EPSF, EPSF_BACKGROUND_COLUMNS
 from tglc.ffi import FFICutout
 from tglc.utils.proper_motion import propagate_gaia_catalog
 
@@ -248,3 +248,20 @@ def make_legacy_synthetic_cutout(**kwargs) -> FFICutout:
 def make_synthetic_epsf(n_cadences: int = 3, psf_size: int = 11, oversample: int = 2):
     k = (psf_size * oversample + 1) ** 2 + len(EPSF_BACKGROUND_COLUMNS)
     return np.linspace(0.0, 1.0, n_cadences * k).reshape(n_cadences, k).astype(np.float64)
+
+
+def make_synthetic_cutout_and_epsf(**cutout_kwargs) -> tuple[FFICutout, EPSF]:
+    """A ``make_synthetic_cutout`` and an :class:`EPSF` whose metadata and cadences match it."""
+    cutout = make_synthetic_cutout(**cutout_kwargs)
+    epsf = EPSF(
+        make_synthetic_epsf(n_cadences=len(cutout.time)),
+        psf_size=11,
+        oversample=2,
+        orbit=cutout.orbit,
+        sector=cutout.sector,
+        camera=cutout.camera,
+        ccd=cutout.ccd,
+        cutout_x=cutout.cutout_x,
+        cutout_y=cutout.cutout_y,
+    )
+    return cutout, epsf
