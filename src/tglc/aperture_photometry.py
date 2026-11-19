@@ -9,7 +9,6 @@ composes them into the pipeline's photometry product.
 from astropy import units as u
 from astropy.table import QTable
 import numpy as np
-from scipy.ndimage import center_of_mass
 
 from tglc.utils.constants import (
     TESS_PIXEL_SATURATION_LEVEL,
@@ -81,7 +80,19 @@ def measure_aperture_centroids(
         centroids.
     """
     bottom, top, left, right = aperture_limits
-    centroids = np.array([center_of_mass(image[bottom:top, left:right]) for image in images])
+    window = images[:, bottom:top, left:right]
+    # Flux-weighted mean pixel index along each axis, for all cadences at once. This is the
+    # definition used by `scipy.ndimage.center_of_mass`, which is far slower called per cadence.
+    total = window.sum(axis=(1, 2))
+    row_indices = np.arange(window.shape[1], dtype=float)[:, np.newaxis]
+    column_indices = np.arange(window.shape[2], dtype=float)
+    centroids = np.stack(
+        (
+            (window * row_indices).sum(axis=(1, 2)) / total,
+            (window * column_indices).sum(axis=(1, 2)) / total,
+        ),
+        axis=1,
+    )
     centroids[:, 0] += bottom
     centroids[:, 1] += left
     return centroids

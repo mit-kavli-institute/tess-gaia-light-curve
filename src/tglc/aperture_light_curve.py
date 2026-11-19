@@ -107,14 +107,16 @@ class ApertureLightCurve(TimeSeries):
             lc_group = file.create_group("LightCurve")
             lc_group.create_dataset("BJD", data=self.time.tjd, dtype=np.float64)
             lc_group.create_dataset("Cadence", data=self["cadence"], dtype=np.int64)
+            # `np.full`, not `np.full_like(self.time, ...)`: numpy fills a `Time` one element at a
+            # time, which dominated the cost of writing a light curve.
             lc_group.create_dataset(
                 "X",
-                data=np.full_like(self.time, self.meta["ccd_x"], dtype=np.float64),
+                data=np.full(len(self.time), self.meta["ccd_x"], dtype=np.float64),
                 dtype=np.float64,
             )
             lc_group.create_dataset(
                 "Y",
-                data=np.full_like(self.time, self.meta["ccd_y"], dtype=np.float64),
+                data=np.full(len(self.time), self.meta["ccd_y"], dtype=np.float64),
                 dtype=np.float64,
             )
             lc_group.create_dataset("QualityFlag", data=self["quality_flag"], dtype=np.int64)
