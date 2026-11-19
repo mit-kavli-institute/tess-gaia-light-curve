@@ -62,6 +62,10 @@ def tglc_main():
         from tglc.scripts.migrate import migrate_main
 
         migrate_main(args)
+    elif args.tglc_command == "backfill-epsf-headers":
+        from tglc.scripts.backfill_epsf_headers import backfill_epsf_headers_main
+
+        backfill_epsf_headers_main(args)
     elif args.tglc_command == "all":
 
         def log_heading(msg: str):

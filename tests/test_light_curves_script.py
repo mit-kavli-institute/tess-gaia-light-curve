@@ -4,11 +4,8 @@ import argparse
 import logging
 from pathlib import Path
 
-import astropy.units as u
-import numpy as np
 import pytest
 
-from tglc.epsf import EPSF
 from tglc.io import write_cutout_fits, write_epsf_fits
 from tglc.scripts.light_curves import (
     get_requested_tic_ids,
@@ -16,7 +13,7 @@ from tglc.scripts.light_curves import (
     read_tic_id_file,
 )
 
-from .synthetic_data import make_synthetic_cutout, make_synthetic_epsf
+from .synthetic_data import make_synthetic_cutout_and_epsf
 
 
 ORBIT = 185  # make_synthetic_cutout's orbit; contained in sector 89
@@ -94,11 +91,6 @@ def test_get_requested_tic_ids_warns_for_empty_file(tmp_path: Path, caplog):
     assert "No TIC IDs found" in caplog.text
 
 
-def _fake_spacecraft_position(orbit, time, ephemerides_directory):
-    """Stand-in for the JPL Horizons query, as in tests/test_light_curve.py."""
-    return np.zeros((len(np.atleast_1d(time.tdb.jd)), 3)) * u.au
-
-
 def _make_light_curve_tree(tmp_path: Path) -> Path:
     """Build a Manifest-shaped orbit directory with one cutout FITS and its matching ePSF."""
     ccd_directory = tmp_path / f"orbit-{ORBIT}" / "ffi" / "cam1" / "ccd1"
@@ -107,19 +99,8 @@ def _make_light_curve_tree(tmp_path: Path) -> Path:
     for directory in (source_directory, epsf_directory):
         directory.mkdir(parents=True)
 
-    cutout = make_synthetic_cutout()
+    cutout, epsf = make_synthetic_cutout_and_epsf()
     write_cutout_fits(cutout, source_directory / "source_0_0.fits")
-    epsf = EPSF(
-        make_synthetic_epsf(n_cadences=len(cutout.time)),
-        psf_size=11,
-        oversample=2,
-        orbit=cutout.orbit,
-        sector=cutout.sector,
-        camera=cutout.camera,
-        ccd=cutout.ccd,
-        cutout_x=0,
-        cutout_y=0,
-    )
     write_epsf_fits(epsf, epsf_directory / "epsf_0_0.fits")
     return ccd_directory / "LC"
 
@@ -144,8 +125,7 @@ def _light_curve_tic_ids(light_curve_directory: Path) -> list[int]:
     return sorted(int(file.stem) for file in light_curve_directory.glob("*.h5"))
 
 
-def test_make_light_curves_main_produces_all_targets(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+def test_make_light_curves_main_produces_all_targets(tmp_path: Path, fake_spacecraft_position):
     light_curve_directory = _make_light_curve_tree(tmp_path)
 
     make_light_curves_main(_light_curve_args(tmp_path))
@@ -154,8 +134,7 @@ def test_make_light_curves_main_produces_all_targets(tmp_path: Path, monkeypatch
     assert _light_curve_tic_ids(light_curve_directory) == [500001, 500002, 500003]
 
 
-def test_make_light_curves_main_applies_magnitude_limit(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+def test_make_light_curves_main_applies_magnitude_limit(tmp_path: Path, fake_spacecraft_position):
     light_curve_directory = _make_light_curve_tree(tmp_path)
 
     make_light_curves_main(_light_curve_args(tmp_path, light_curve_max_magnitude=12.0))
@@ -164,9 +143,8 @@ def test_make_light_curves_main_applies_magnitude_limit(tmp_path: Path, monkeypa
 
 
 def test_make_light_curves_main_adds_tic_file_targets_to_magnitude_limit(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, fake_spacecraft_position
 ):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
     light_curve_directory = _make_light_curve_tree(tmp_path)
     tic_id_file = tmp_path / "targets.txt"
     tic_id_file.write_text("500003\n")
@@ -178,8 +156,9 @@ def test_make_light_curves_main_adds_tic_file_targets_to_magnitude_limit(
     assert _light_curve_tic_ids(light_curve_directory) == [500001, 500002, 500003]
 
 
-def test_make_light_curves_main_tic_file_alone_restricts_targets(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
+def test_make_light_curves_main_tic_file_alone_restricts_targets(
+    tmp_path: Path, fake_spacecraft_position
+):
     light_curve_directory = _make_light_curve_tree(tmp_path)
     tic_id_file = tmp_path / "targets.txt"
     tic_id_file.write_text("500002\n500003\n")
@@ -190,9 +169,8 @@ def test_make_light_curves_main_tic_file_alone_restricts_targets(tmp_path: Path,
 
 
 def test_make_light_curves_main_warns_about_tic_ids_never_found(
-    tmp_path: Path, monkeypatch, caplog
+    tmp_path: Path, fake_spacecraft_position, caplog
 ):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
     light_curve_directory = _make_light_curve_tree(tmp_path)
     tic_id_file = tmp_path / "targets.txt"
     # 500004 is in the cutout catalog but outside the pixel bounds; 999999 isn't in it at all

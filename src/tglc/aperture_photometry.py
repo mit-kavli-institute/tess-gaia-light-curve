@@ -9,7 +9,6 @@ composes them into the pipeline's photometry product.
 from astropy import units as u
 from astropy.table import QTable
 import numpy as np
-from scipy.ndimage import center_of_mass
 
 from tglc.utils.constants import (
     TESS_PIXEL_SATURATION_LEVEL,
@@ -81,7 +80,19 @@ def measure_aperture_centroids(
         centroids.
     """
     bottom, top, left, right = aperture_limits
-    centroids = np.array([center_of_mass(image[bottom:top, left:right]) for image in images])
+    window = images[:, bottom:top, left:right]
+    # Flux-weighted mean pixel index along each axis, for all cadences at once. This is the
+    # definition used by `scipy.ndimage.center_of_mass`, which is far slower called per cadence.
+    total = window.sum(axis=(1, 2))
+    row_indices = np.arange(window.shape[1], dtype=float)[:, np.newaxis]
+    column_indices = np.arange(window.shape[2], dtype=float)
+    centroids = np.stack(
+        (
+            (window * row_indices).sum(axis=(1, 2)) / total,
+            (window * column_indices).sum(axis=(1, 2)) / total,
+        ),
+        axis=1,
+    )
     centroids[:, 0] += bottom
     centroids[:, 1] += left
     return centroids
@@ -254,7 +265,10 @@ def get_normalized_aperture_photometry(
         - `"{column_name_prefix}centroid_y"`: Y coordinate in image of flux-weighted aperture centroid
 
         Metadata:
-        - `"local_background"`: Local background flux level used in normalization.
+        - `"{column_name_prefix}local_background"`: Local background flux level used in
+          normalization.
+        - `"{column_name_prefix}flux_portion"`: Portion of the target's flux falling in the
+          aperture, used to convert the normalized aperture flux to magnitude.
     """
     aperture_limits = get_aperture_limits(aperture_size, x, y, images.shape[1], images.shape[2])
     exposure_time_seconds = exposure_time.to_value(u.second)
@@ -284,7 +298,10 @@ def get_normalized_aperture_photometry(
             f"{column_name_prefix}centroid_x": centroids[:, 1],
             f"{column_name_prefix}centroid_y": centroids[:, 0],
         },
-        meta={f"{column_name_prefix}local_background": local_background},
+        meta={
+            f"{column_name_prefix}local_background": local_background,
+            f"{column_name_prefix}flux_portion": float(flux_portion_in_aperture),
+        },
     )
 
     return table
