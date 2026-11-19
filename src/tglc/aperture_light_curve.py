@@ -107,25 +107,20 @@ class ApertureLightCurve(TimeSeries):
             lc_group = file.create_group("LightCurve")
             lc_group.create_dataset("BJD", data=self.time.tjd, dtype=np.float64)
             lc_group.create_dataset("Cadence", data=self["cadence"], dtype=np.int64)
-            # `np.full`, not `np.full_like(self.time, ...)`: numpy fills a `Time` one element at a
-            # time, which dominated the cost of writing a light curve.
-            lc_group.create_dataset(
-                "X",
-                data=np.full(len(self.time), self.meta["ccd_x"], dtype=np.float64),
-                dtype=np.float64,
-            )
-            lc_group.create_dataset(
-                "Y",
-                data=np.full(len(self.time), self.meta["ccd_y"], dtype=np.float64),
-                dtype=np.float64,
-            )
+            # Constant columns are built with `np.full(n_cadences, ...)` rather than `np.full_like`
+            # on a table column: numpy fills a `Time` column one element at a time.
+            n_cadences = len(self)
+            for name, meta_key in (("X", "ccd_x"), ("Y", "ccd_y")):
+                lc_group.create_dataset(
+                    name, data=np.full(n_cadences, self.meta[meta_key]), dtype=np.float64
+                )
             lc_group.create_dataset("QualityFlag", data=self["quality_flag"], dtype=np.int64)
 
             background_group = lc_group.create_group("Background")
             background_group.create_dataset("Value", data=self["background_flux"], dtype=np.float64)
             background_group.create_dataset(
                 "Error",
-                data=np.full_like(self["background_flux"], mad_std(self["background_flux"])),
+                data=np.full(n_cadences, mad_std(self["background_flux"])),
                 dtype=np.float64,
             )
 
@@ -142,7 +137,7 @@ class ApertureLightCurve(TimeSeries):
                 aperture_group.create_dataset("RawMagnitude", data=aperture_data, dtype=np.float64)
                 aperture_group.create_dataset(
                     "RawMagnitudeError",
-                    data=np.full_like(aperture_data, mad_std(aperture_data)),
+                    data=np.full(n_cadences, mad_std(aperture_data)),
                     dtype="f",
                 )
                 aperture_group.create_dataset(

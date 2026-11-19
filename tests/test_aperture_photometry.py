@@ -310,6 +310,35 @@ def test_measure_aperture_centroids_matches_center_of_mass(images_and_limits):
     )
 
 
+@given(
+    npst.arrays(
+        np.float64,
+        st.tuples(st.integers(1, 6), st.integers(1, 5), st.integers(1, 5)),
+        elements=st.floats(min_value=-1e7, max_value=1e7),
+    )
+)
+def test_measure_aperture_centroids_matches_center_of_mass_for_signed_flux(images):
+    """Decontaminated cutouts contain negative pixels, where the normalizing sum can nearly cancel.
+
+    The agreement tolerance is therefore scaled by the conditioning of each cadence's flux sum,
+    `sum(|flux|) / |sum(flux)|`; cadences whose sum cancels to zero are not finite in either
+    implementation.
+    """
+    limits = (0, images.shape[1], 0, images.shape[2])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        centroids = measure_aperture_centroids(images, limits)
+    oracle = _oracle_aperture_centroids(images, limits)
+
+    total = images.sum(axis=(1, 2))
+    finite = total != 0
+    np.testing.assert_array_equal(np.isfinite(centroids), np.isfinite(oracle))
+    condition = np.abs(images).sum(axis=(1, 2))[finite] / np.abs(total[finite])
+    tolerance = 1e-12 * condition[:, np.newaxis] * max(images.shape[1:])
+    assert (np.abs(centroids[finite] - oracle[finite]) <= tolerance).all()
+
+
 def test_measure_aperture_centroids_nan_pixel_only_affects_its_cadence_and_window():
     rng = np.random.default_rng(seed=7)
     images = rng.uniform(1.0, 10.0, size=(3, 5, 5))

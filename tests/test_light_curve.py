@@ -30,23 +30,7 @@ from tglc.light_curve import (
     make_target_design_matrix,
 )
 
-from .synthetic_data import make_synthetic_cutout, make_synthetic_epsf
-
-
-def _make_cutout_and_epsf():
-    cutout = make_synthetic_cutout()  # 12x12, 5 cadences, 4 stars
-    epsf = EPSF(
-        make_synthetic_epsf(n_cadences=5),
-        psf_size=11,
-        oversample=2,
-        orbit=185,
-        sector=89,
-        camera=1,
-        ccd=1,
-        cutout_x=0,
-        cutout_y=0,
-    )
-    return cutout, epsf
+from .synthetic_data import make_synthetic_cutout_and_epsf, make_synthetic_epsf
 
 
 def _make_full_design_matrix(cutout, epsf):
@@ -107,7 +91,7 @@ def _legacy_get_cutout_for_light_curve(
 
 @pytest.mark.parametrize("star_index", [0, 3], ids=["interior_star", "edge_clamped_star"])
 def test_get_cutout_for_light_curve_characterization(star_index):
-    cutout, epsf = _make_cutout_and_epsf()
+    cutout, epsf = make_synthetic_cutout_and_epsf()
     design_matrix, star_positions = _make_full_design_matrix(cutout, epsf)
     args = (
         cutout.flux,
@@ -129,14 +113,8 @@ def test_get_cutout_for_light_curve_characterization(star_index):
     np.testing.assert_allclose(np.nansum(psf_portion), 1.0)
 
 
-def _fake_spacecraft_position(orbit, time, ephemerides_directory):
-    # Zero position -> zero barycentric light-time correction, so time_btjd == source.time
-    return np.zeros((len(np.atleast_1d(time.tdb.jd)), 3)) * u.au
-
-
-def test_generate_light_curves_characterization(monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
-    cutout, epsf = _make_cutout_and_epsf()
+def test_generate_light_curves_characterization(fake_spacecraft_position):
+    cutout, epsf = make_synthetic_cutout_and_epsf()
 
     light_curves = list(generate_light_curves(cutout, epsf, Path("/nonexistent")))
 
@@ -206,9 +184,8 @@ def test_generate_light_curves_characterization(monkeypatch):
     assert light_curve.meta["large_aperture_local_background"] == -3138756.963741101 * u.electron
 
 
-def test_generate_light_curves_tic_ids_filter(monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
-    cutout, epsf = _make_cutout_and_epsf()
+def test_generate_light_curves_tic_ids_filter(fake_spacecraft_position):
+    cutout, epsf = make_synthetic_cutout_and_epsf()
 
     light_curves = list(generate_light_curves(cutout, epsf, Path("/nonexistent"), tic_ids=[500002]))
 
@@ -216,9 +193,8 @@ def test_generate_light_curves_tic_ids_filter(monkeypatch):
     assert light_curves[0].meta["tic_id"] == 500002
 
 
-def test_generate_light_curves_max_magnitude_filter(monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
-    cutout, epsf = _make_cutout_and_epsf()
+def test_generate_light_curves_max_magnitude_filter(fake_spacecraft_position):
+    cutout, epsf = make_synthetic_cutout_and_epsf()
 
     # Synthetic Gaia magnitudes are 9.95, 11.45, 12.25, 12.95; star 4 is outside the pixel bounds
     light_curves = list(
@@ -228,9 +204,8 @@ def test_generate_light_curves_max_magnitude_filter(monkeypatch):
     assert [light_curve.meta["tic_id"] for light_curve in light_curves] == [500001, 500002]
 
 
-def test_generate_light_curves_tic_ids_add_to_max_magnitude_selection(monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
-    cutout, epsf = _make_cutout_and_epsf()
+def test_generate_light_curves_tic_ids_add_to_max_magnitude_selection(fake_spacecraft_position):
+    cutout, epsf = make_synthetic_cutout_and_epsf()
 
     # TIC 500003 (12.25 mag) is fainter than the limit, but is requested explicitly
     light_curves = list(
@@ -246,9 +221,8 @@ def test_generate_light_curves_tic_ids_add_to_max_magnitude_selection(monkeypatc
     ]
 
 
-def test_generate_light_curves_ignores_tic_ids_absent_from_cutout(monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
-    cutout, epsf = _make_cutout_and_epsf()
+def test_generate_light_curves_ignores_tic_ids_absent_from_cutout(fake_spacecraft_position):
+    cutout, epsf = make_synthetic_cutout_and_epsf()
 
     light_curves = list(
         generate_light_curves(cutout, epsf, Path("/nonexistent"), tic_ids=[500002, 999999])
@@ -257,9 +231,8 @@ def test_generate_light_curves_ignores_tic_ids_absent_from_cutout(monkeypatch):
     assert [light_curve.meta["tic_id"] for light_curve in light_curves] == [500002]
 
 
-def test_generate_light_curves_max_magnitude_filter_excludes_all_targets(monkeypatch):
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
-    cutout, epsf = _make_cutout_and_epsf()
+def test_generate_light_curves_max_magnitude_filter_excludes_all_targets(fake_spacecraft_position):
+    cutout, epsf = make_synthetic_cutout_and_epsf()
 
     light_curves = list(
         generate_light_curves(cutout, epsf, Path("/nonexistent"), max_magnitude=5.0)
@@ -269,7 +242,7 @@ def test_generate_light_curves_max_magnitude_filter_excludes_all_targets(monkeyp
 
 
 def test_generate_light_curves_rejects_mismatched_epsf():
-    cutout, _ = _make_cutout_and_epsf()
+    cutout, _ = make_synthetic_cutout_and_epsf()
     mismatched_epsf = EPSF(
         make_synthetic_epsf(n_cadences=5),
         psf_size=11,
@@ -334,7 +307,7 @@ def test_get_design_matrix_rows_for_window_matches_legacy_height_stride_formula(
 
 
 def test_make_target_design_matrix_matches_direct_call():
-    _, epsf = _make_cutout_and_epsf()
+    _, epsf = make_synthetic_cutout_and_epsf()
 
     target_design_matrix = make_target_design_matrix(epsf, (5, 5), 2.5, 2.5, 1.0)
 
@@ -386,7 +359,7 @@ def test_get_psf_portion_collapses_time_and_normalizes():
 
 def test_get_high_background_cadence_mask_uses_flat_column():
     """The mask is driven by the flat background column, not y_strap (issue #19)."""
-    _, epsf = _make_cutout_and_epsf()
+    _, epsf = make_synthetic_cutout_and_epsf()
     epsf.array[:, :] = 1.0
     # y_strap (column -6) outlier on cadence 1; flat (column -1) outlier on cadence 3
     epsf.array[:, -6] = [1.05, 100.0, 1.0, 1.0, 1.1]
@@ -403,7 +376,7 @@ def test_get_high_background_cadence_mask_three_sigma_threshold():
     A linear ramp has deviations of up to 2x the MAD-standard-deviation from its median; the
     mistranscribed 1-sigma threshold flagged its first and last cadences.
     """
-    _, epsf = _make_cutout_and_epsf()
+    _, epsf = make_synthetic_cutout_and_epsf()
     epsf.array[:, -1] = [0.0, 1.0, 2.0, 3.0, 4.0]
 
     mask = get_high_background_cadence_mask(epsf)
@@ -413,7 +386,7 @@ def test_get_high_background_cadence_mask_three_sigma_threshold():
 
 def test_get_high_background_cadence_mask_constant_background():
     """A constant background yields a zero MAD; the >= comparison must not flag everything."""
-    _, epsf = _make_cutout_and_epsf()
+    _, epsf = make_synthetic_cutout_and_epsf()
     epsf.array[:, -1] = 1.0
 
     mask = get_high_background_cadence_mask(epsf)
@@ -423,7 +396,7 @@ def test_get_high_background_cadence_mask_constant_background():
 
 def test_get_high_background_cadence_mask_constant_background_with_outlier():
     """With a zero MAD, only cadences actually deviating from the median are flagged."""
-    _, epsf = _make_cutout_and_epsf()
+    _, epsf = make_synthetic_cutout_and_epsf()
     epsf.array[:, -1] = [1.0, 1.0, 1.0, 100.0, 1.0]
 
     mask = get_high_background_cadence_mask(epsf)
@@ -432,7 +405,7 @@ def test_get_high_background_cadence_mask_constant_background_with_outlier():
 
 
 def test_get_background_model_matches_legacy_expression():
-    cutout, epsf = _make_cutout_and_epsf()
+    cutout, epsf = make_synthetic_cutout_and_epsf()
     design_matrix, _ = _make_full_design_matrix(cutout, epsf)
 
     model = get_background_model(epsf, design_matrix, cutout.flux.shape[1:])

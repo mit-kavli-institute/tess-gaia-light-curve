@@ -2,88 +2,97 @@
 
 from pathlib import Path
 
+from astropy.stats import mad_std
 import astropy.units as u
 import h5py
 import numpy as np
+import pytest
 
 from tglc.aperture_light_curve import ApertureLightCurve
-from tglc.epsf import EPSF
 from tglc.light_curve import generate_light_curves
 
-from .synthetic_data import make_synthetic_cutout, make_synthetic_epsf
+from .synthetic_data import make_synthetic_cutout_and_epsf
 
 
-def _fake_spacecraft_position(orbit, time, ephemerides_directory):
-    """Stand-in for the JPL Horizons query, as in tests/test_light_curve.py."""
-    return np.zeros((len(np.atleast_1d(time.tdb.jd)), 3)) * u.au
-
-
-def _make_light_curve(monkeypatch) -> ApertureLightCurve:
-    monkeypatch.setattr("tglc.light_curve.get_tess_spacecraft_position", _fake_spacecraft_position)
-    cutout = make_synthetic_cutout()  # 12x12, 5 cadences, 4 stars
-    epsf = EPSF(
-        make_synthetic_epsf(n_cadences=len(cutout.time)),
-        psf_size=11,
-        oversample=2,
-        orbit=cutout.orbit,
-        sector=cutout.sector,
-        camera=cutout.camera,
-        ccd=cutout.ccd,
-        cutout_x=0,
-        cutout_y=0,
-    )
-    return next(generate_light_curves(cutout, epsf, Path("/nonexistent")))
-
-
-def test_write_hdf5_target_position_columns(tmp_path: Path, monkeypatch):
-    """`LightCurve/X` and `LightCurve/Y` repeat the target's CCD position for every cadence."""
-    light_curve = _make_light_curve(monkeypatch)
-    n_cadences = len(light_curve)
+@pytest.fixture
+def written_light_curve(
+    tmp_path: Path, fake_spacecraft_position
+) -> tuple[ApertureLightCurve, Path]:
+    """A synthetic light curve and the HDF5 file `write_hdf5` produced for it."""
+    cutout, epsf = make_synthetic_cutout_and_epsf()  # 12x12, 5 cadences, 4 stars
+    light_curve = next(generate_light_curves(cutout, epsf, Path("/nonexistent")))
     output_file = tmp_path / "light_curve.h5"
-
     light_curve.write_hdf5(output_file)
+    return light_curve, output_file
+
+
+def _assert_dataset(dataset: h5py.Dataset, expected: np.ndarray, dtype: type):
+    assert dataset.dtype == dtype
+    np.testing.assert_array_equal(dataset[:], np.asarray(expected).astype(dtype))
+
+
+def test_write_hdf5_attributes(written_light_curve):
+    light_curve, output_file = written_light_curve
+    meta = light_curve.meta
 
     with h5py.File(output_file) as file:
-        for name, meta_key in (("X", "ccd_x"), ("Y", "ccd_y")):
-            dataset = file["LightCurve"][name]
-            assert dataset.dtype == np.float64
-            assert dataset.shape == (n_cadences,)
-            np.testing.assert_array_equal(
-                dataset[:], np.full(n_cadences, light_curve.meta[meta_key])
-            )
+        assert dict(file.attrs) == {
+            "TIC ID": meta["tic_id"],
+            "Orbit": meta["orbit"],
+            "Sector": meta["sector"],
+            "Camera": meta["camera"],
+            "CCD": meta["ccd"],
+            "RA": meta["sky_coord"].ra.deg,
+            "Dec": meta["sky_coord"].dec.deg,
+            "BJDoffset": 2457000.0,
+            "TessMag": meta["tess_magnitude"],
+        }
 
-
-def test_write_hdf5_layout(tmp_path: Path, monkeypatch):
-    light_curve = _make_light_curve(monkeypatch)
-    n_cadences = len(light_curve)
-    output_file = tmp_path / "light_curve.h5"
-
-    light_curve.write_hdf5(output_file)
-
-    with h5py.File(output_file) as file:
-        assert file.attrs["TIC ID"] == light_curve.meta["tic_id"]
-        assert file.attrs["Orbit"] == light_curve.meta["orbit"]
-
-        lc_group = file["LightCurve"]
-        np.testing.assert_array_equal(lc_group["BJD"][:], light_curve.time.tjd)
-        np.testing.assert_array_equal(lc_group["Cadence"][:], light_curve["cadence"])
-        np.testing.assert_array_equal(lc_group["QualityFlag"][:], light_curve["quality_flag"])
-        np.testing.assert_array_equal(
-            lc_group["Background"]["Value"][:], light_curve["background_flux"]
-        )
-        assert lc_group["Background"]["Error"].shape == (n_cadences,)
-
-        photometry_group = lc_group["AperturePhotometry"]
+        photometry_group = file["LightCurve"]["AperturePhotometry"]
         assert sorted(photometry_group) == ["LargeAperture", "PrimaryAperture", "SmallAperture"]
+        for aperture_name, aperture_size in (("Primary", 3), ("Small", 1), ("Large", 5)):
+            local_background = meta[f"{aperture_name.lower()}_aperture_local_background"]
+            assert dict(photometry_group[f"{aperture_name}Aperture"].attrs) == {
+                "name": f"TGLCAperture{aperture_name}",
+                "description": f"{aperture_size}x{aperture_size} square",
+                "localbackground": local_background.to_value(u.electron),
+            }
+
+
+def test_write_hdf5_datasets(written_light_curve):
+    light_curve, output_file = written_light_curve
+    n_cadences = len(light_curve)
+
+    with h5py.File(output_file) as file:
+        lc_group = file["LightCurve"]
+        _assert_dataset(lc_group["BJD"], light_curve.time.tjd, np.float64)
+        _assert_dataset(lc_group["Cadence"], light_curve["cadence"], np.int64)
+        _assert_dataset(lc_group["QualityFlag"], light_curve["quality_flag"], np.int64)
+        # The target's CCD position, repeated for every cadence
+        _assert_dataset(lc_group["X"], np.full(n_cadences, light_curve.meta["ccd_x"]), np.float64)
+        _assert_dataset(lc_group["Y"], np.full(n_cadences, light_curve.meta["ccd_y"]), np.float64)
+
+        background_flux = light_curve["background_flux"]
+        _assert_dataset(lc_group["Background"]["Value"], background_flux, np.float64)
+        _assert_dataset(
+            lc_group["Background"]["Error"],
+            np.full(n_cadences, mad_std(background_flux)),
+            np.float64,
+        )
+
         for aperture_name in ("Primary", "Small", "Large"):
-            aperture_group = photometry_group[f"{aperture_name}Aperture"]
+            aperture_group = lc_group["AperturePhotometry"][f"{aperture_name}Aperture"]
             column_prefix = f"{aperture_name.lower()}_aperture_"
-            np.testing.assert_array_equal(
-                aperture_group["RawMagnitude"][:], light_curve[f"{column_prefix}magnitude"].value
+            magnitude = light_curve[f"{column_prefix}magnitude"]
+            _assert_dataset(aperture_group["RawMagnitude"], magnitude, np.float64)
+            _assert_dataset(
+                aperture_group["RawMagnitudeError"],
+                np.full(n_cadences, mad_std(magnitude)),
+                np.float32,
             )
-            assert aperture_group["RawMagnitudeError"].shape == (n_cadences,)
-            for dataset_name, column in (("X", "centroid_x"), ("Y", "centroid_y")):
-                np.testing.assert_array_equal(
-                    aperture_group[dataset_name][:],
-                    light_curve[f"{column_prefix}{column}"].value.astype(np.float32),
-                )
+            _assert_dataset(
+                aperture_group["X"], light_curve[f"{column_prefix}centroid_x"].value, np.float32
+            )
+            _assert_dataset(
+                aperture_group["Y"], light_curve[f"{column_prefix}centroid_y"].value, np.float32
+            )
