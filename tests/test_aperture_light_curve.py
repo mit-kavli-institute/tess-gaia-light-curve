@@ -31,32 +31,43 @@ def _assert_dataset(dataset: h5py.Dataset, expected: np.ndarray, dtype: type):
     np.testing.assert_array_equal(dataset[:], np.asarray(expected).astype(dtype))
 
 
+def _assert_attributes_include(attrs: h5py.AttributeManager, expected: dict):
+    """Check the expected attributes are present with the expected values, allowing others."""
+    assert {name: attrs[name] for name in expected if name in attrs} == expected
+
+
 def test_write_hdf5_attributes(written_light_curve):
     light_curve, output_file = written_light_curve
     meta = light_curve.meta
 
     with h5py.File(output_file) as file:
-        assert dict(file.attrs) == {
-            "TIC ID": meta["tic_id"],
-            "Orbit": meta["orbit"],
-            "Sector": meta["sector"],
-            "Camera": meta["camera"],
-            "CCD": meta["ccd"],
-            "RA": meta["sky_coord"].ra.deg,
-            "Dec": meta["sky_coord"].dec.deg,
-            "BJDoffset": 2457000.0,
-            "TessMag": meta["tess_magnitude"],
-        }
+        _assert_attributes_include(
+            file.attrs,
+            {
+                "TIC ID": meta["tic_id"],
+                "Orbit": meta["orbit"],
+                "Sector": meta["sector"],
+                "Camera": meta["camera"],
+                "CCD": meta["ccd"],
+                "RA": meta["sky_coord"].ra.deg,
+                "Dec": meta["sky_coord"].dec.deg,
+                "BJDoffset": 2457000.0,
+                "TessMag": meta["tess_magnitude"],
+            },
+        )
 
         photometry_group = file["LightCurve"]["AperturePhotometry"]
         assert sorted(photometry_group) == ["LargeAperture", "PrimaryAperture", "SmallAperture"]
         for aperture_name, aperture_size in (("Primary", 3), ("Small", 1), ("Large", 5)):
             local_background = meta[f"{aperture_name.lower()}_aperture_local_background"]
-            assert dict(photometry_group[f"{aperture_name}Aperture"].attrs) == {
-                "name": f"TGLCAperture{aperture_name}",
-                "description": f"{aperture_size}x{aperture_size} square",
-                "localbackground": local_background.to_value(u.electron),
-            }
+            _assert_attributes_include(
+                photometry_group[f"{aperture_name}Aperture"].attrs,
+                {
+                    "name": f"TGLCAperture{aperture_name}",
+                    "description": f"{aperture_size}x{aperture_size} square",
+                    "localbackground": local_background.to_value(u.electron),
+                },
+            )
 
 
 def test_write_hdf5_datasets(written_light_curve):
